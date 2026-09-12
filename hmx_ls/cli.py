@@ -28,6 +28,10 @@ def _launch_spec() -> tuple[str, list[str]]:
     found = shutil.which("hmx-lsp") or shutil.which("hmx-ls")
     if found:
         return found, []
+    wrapper = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                           "bin", "hmx-ls")
+    if os.access(wrapper, os.X_OK):
+        return wrapper, []
     return sys.executable, ["-m", "hmx_ls.cli"]
 
 
