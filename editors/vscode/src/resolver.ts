@@ -8,6 +8,8 @@ export interface ServerCommand {
   command: string;
   args: string[];
   origin: string;
+  cwd?: string;
+  env?: Record<string, string>;
 }
 
 const RELEASE_OWNER = "tickernelz";
@@ -106,6 +108,8 @@ function devCheckout(): ServerCommand | undefined {
           command: interpreter,
           args: ["-m", "hmx_ls.cli", "serve"],
           origin: "dev checkout at " + candidate,
+          cwd: candidate,
+          env: { PYTHONPATH: candidate },
         };
       }
     }
@@ -168,46 +172,61 @@ export async function resolveServer(
   log: vscode.OutputChannel
 ): Promise<ServerCommand | undefined> {
   const config = vscode.workspace.getConfiguration("hmx");
+  const candidates: ServerCommand[] = [];
 
   const explicit = config.get<string>("server.path", "");
   if (explicit) {
     const expanded = expandHome(explicit);
     if (isExecutableFile(expanded)) {
-      return { command: expanded, args: ["serve"], origin: "hmx.server.path setting" };
+      candidates.push({ command: expanded, args: ["serve"], origin: "hmx.server.path setting" });
+    } else {
+      log.appendLine("[hmx-ls] hmx.server.path is not executable: " + expanded);
     }
-    log.appendLine("[hmx-ls] hmx.server.path is not executable: " + expanded);
   }
 
   const fromEnv = process.env.HMX_LSP_PATH;
   if (fromEnv && isExecutableFile(expandHome(fromEnv))) {
-    return { command: expandHome(fromEnv), args: ["serve"], origin: "HMX_LSP_PATH" };
+    candidates.push({ command: expandHome(fromEnv), args: ["serve"], origin: "HMX_LSP_PATH" });
   }
 
   const bundled = bundledBinary(context);
   if (isExecutableFile(bundled)) {
-    return { command: bundled, args: ["serve"], origin: "bundled with extension" };
+    candidates.push({ command: bundled, args: ["serve"], origin: "bundled with extension" });
   }
 
   const stored = storedBinary(context);
   if (isExecutableFile(stored)) {
-    return { command: stored, args: ["serve"], origin: "downloaded release" };
+    candidates.push({ command: stored, args: ["serve"], origin: "downloaded release" });
   }
 
   const onPath = searchPath("hmx-lsp") || searchPath("hmx-ls");
   if (onPath) {
-    return { command: onPath, args: ["serve"], origin: "PATH" };
+    candidates.push({ command: onPath, args: ["serve"], origin: "PATH" });
   }
 
   const dev = devCheckout();
   if (dev) {
-    return dev;
+    candidates.push(dev);
+  }
+
+  for (const candidate of candidates) {
+    if (probe(candidate, log)) {
+      return candidate;
+    }
   }
 
   if (config.get<boolean>("server.autoDownload", true)) {
     const version = config.get<string>("server.version", "latest");
     const downloaded = await downloadServer(context, version, log);
     if (downloaded && isExecutableFile(downloaded)) {
-      return { command: downloaded, args: ["serve"], origin: "downloaded release" };
+      const fresh: ServerCommand = {
+        command: downloaded,
+        args: ["serve"],
+        origin: "downloaded release",
+      };
+      if (probe(fresh, log)) {
+        return fresh;
+      }
     }
   }
 
@@ -215,15 +234,27 @@ export async function resolveServer(
 }
 
 export function probe(command: ServerCommand, log: vscode.OutputChannel): boolean {
+  const args = command.args.slice(0, -1).concat("--version");
   try {
-    const result = cp.spawnSync(command.command, ["--version"], { timeout: 10000 });
+    const result = cp.spawnSync(command.command, args, {
+      timeout: 10000,
+      cwd: command.cwd,
+      env: { ...process.env, ...(command.env || {}) },
+    });
     if (result.error) {
-      log.appendLine("[hmx-ls] probe failed: " + result.error.message);
+      log.appendLine("[hmx-ls] probe failed for " + command.origin + ": " + result.error.message);
+      return false;
+    }
+    if (result.status !== 0) {
+      const detail = (result.stderr || Buffer.from("")).toString().trim().split("\n")[0];
+      log.appendLine(
+        "[hmx-ls] probe rejected " + command.origin + " (exit " + result.status + "): " + detail
+      );
       return false;
     }
     return true;
   } catch (error) {
-    log.appendLine("[hmx-ls] probe threw: " + error);
+    log.appendLine("[hmx-ls] probe threw for " + command.origin + ": " + error);
     return false;
   }
 }

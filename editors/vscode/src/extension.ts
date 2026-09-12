@@ -55,8 +55,8 @@ async function startClient(context: vscode.ExtensionContext): Promise<void> {
     command: resolved.command,
     args: resolved.args,
     options: {
-      cwd: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
-      env: { ...process.env, PYTHONUNBUFFERED: "1" },
+      cwd: resolved.cwd ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+      env: { ...process.env, ...(resolved.env ?? {}), PYTHONUNBUFFERED: "1" },
     },
   };
 
