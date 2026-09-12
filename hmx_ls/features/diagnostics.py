@@ -4,6 +4,7 @@ import ast
 import csv
 import os
 import re
+from collections import deque
 
 from lsprotocol import types
 from lxml import etree
@@ -25,6 +26,7 @@ XMLID_ATTRS = ("ref", "action", "inherit")
 SYNTH_MODEL = re.compile(r"^(?:[a-zA-Z0-9_]+\.)?model_([a-zA-Z0-9_]+)$")
 SYNTH_FIELD = re.compile(r"^(?:[a-zA-Z0-9_]+\.)?field_([a-zA-Z0-9_]+)__([a-zA-Z0-9_]+)$")
 SKIP_MODIFIER_VALUES = {"1", "0", "true", "false", "True", "False"}
+COMODEL_ATTRS = ("domain", "context")
 
 
 def _diag(line: int, start: int, end: int, message: str, code: str,
@@ -85,27 +87,43 @@ def _known_xmlid(server, ref: str, module: str | None) -> bool:
     return False
 
 
+def _expression_scope(server, elem, model: str | None) -> tuple[str | None, bool]:
+    if elem.tag != "field":
+        return model, True
+    name = elem.get("name")
+    if not name or not model:
+        return model, True
+    target = server.resolver.comodel(model, name.split(".")[0])
+    if target and server.resolver.known(target):
+        return target, True
+    return None, False
+
+
 def _check_expressions(server, elem, line: int, lines: list[str], model: str | None,
                        module: str | None) -> list[types.Diagnostic]:
     out: list[types.Diagnostic] = []
+    comodel, resolved = _expression_scope(server, elem, model)
     for attr in EXPR_ATTRS:
         value = elem.get(attr)
         if not value or value.strip() in SKIP_MODIFIER_VALUES:
             continue
+        scope = comodel if attr in COMODEL_ATTRS else model
+        if attr in COMODEL_ATTRS and not resolved:
+            scope = None
         base, _ = _attr_offset(lines, line, attr, value)
         for ref in refs_for_attribute(attr, value):
             start, end = base + ref.start, base + ref.end
             if ref.kind == "field":
-                if not model or not server.resolver.known(model):
+                if not scope or not server.resolver.known(scope):
                     continue
                 if is_domain_keyword(ref.path):
                     continue
                 head = ref.path.split(".")[0]
-                if head in server.resolver.fields(model):
+                if head in server.resolver.fields(scope):
                     continue
                 out.append(_error(
                     line, start, end,
-                    f"Unknown field '{head}' on model '{model}' in {attr}=",
+                    f"Unknown field '{head}' on model '{scope}' in {attr}=",
                     "hmx-unknown-field"))
             elif ref.kind == "xmlid" and not _known_xmlid(server, ref.path, module):
                 out.append(_error(
@@ -248,105 +266,136 @@ def _model_of_class(node: ast.ClassDef) -> str | None:
     return None
 
 
+def _class_call_diagnostics(server, model: str, methods, call: ast.Call,
+                            out: list[types.Diagnostic]) -> None:
+    func = call.func
+    name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+    if name in RELATIONAL and call.args:
+        arg = call.args[0]
+        if (isinstance(arg, ast.Constant) and isinstance(arg.value, str)
+                and arg.value != "self"
+                and not is_known_model(server.resolver, arg.value)):
+            out.append(_error(arg.lineno - 1, arg.col_offset, arg.end_col_offset,
+                              f"Unknown target model '{arg.value}' in {name}",
+                              "hmx-unknown-model"))
+    for keyword in call.keywords:
+        if keyword.arg not in ("compute", "inverse", "search"):
+            continue
+        value = keyword.value
+        if (isinstance(value, ast.Constant) and isinstance(value.value, str)
+                and value.value not in methods):
+            out.append(_warn(value.lineno - 1, value.col_offset, value.end_col_offset,
+                             f"Method '{value.value}' referenced by {keyword.arg}= "
+                             f"is not defined on '{model}'",
+                             "hmx-unknown-method"))
+
+
+def _class_decorator_diagnostics(server, model: str, fields, item,
+                                 out: list[types.Diagnostic]) -> None:
+    for decorator in item.decorator_list:
+        if not isinstance(decorator, ast.Call):
+            continue
+        func = decorator.func
+        if not (isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name)
+                and func.value.id == "api"):
+            continue
+        if func.attr not in ("depends", "onchange", "constrains"):
+            continue
+        for arg in decorator.args:
+            if not (isinstance(arg, ast.Constant) and isinstance(arg.value, str)):
+                continue
+            if is_domain_keyword(arg.value):
+                continue
+            current = model
+            current_fields = fields
+            for part in arg.value.split("."):
+                if part not in current_fields:
+                    out.append(_error(
+                        arg.lineno - 1, arg.col_offset, arg.end_col_offset,
+                        f"Unknown field '{part}' on model '{current}' "
+                        f"in @api.{func.attr}",
+                        "hmx-unknown-field"))
+                    break
+                nxt = server.resolver.comodel(current, part)
+                if not nxt or not server.resolver.known(nxt):
+                    break
+                current = nxt
+                current_fields = server.resolver.fields(nxt)
+
+
+def _class_diagnostics(server, node: ast.ClassDef, out: list[types.Diagnostic]) -> None:
+    model = _model_of_class(node)
+    if not model or not server.resolver.known(model):
+        return
+    fields = server.resolver.fields(model)
+    methods = server.resolver.methods(model)
+    for item in node.body:
+        if isinstance(item, ast.Assign) and isinstance(item.value, ast.Call):
+            _class_call_diagnostics(server, model, methods, item.value, out)
+        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            _class_decorator_diagnostics(server, model, fields, item, out)
+
+
+def _env_model_diagnostic(server, node: ast.Subscript, out: list[types.Diagnostic]) -> None:
+    slot = node.slice
+    if (isinstance(slot, ast.Constant) and isinstance(slot.value, str)
+            and not is_known_model(server.resolver, slot.value)):
+        out.append(_error(slot.lineno - 1, slot.col_offset, slot.end_col_offset,
+                          f"Unknown model '{slot.value}' in env[...]",
+                          "hmx-unknown-model"))
+
+
+def _env_ref_diagnostic(server, node: ast.Call, module: str | None,
+                        out: list[types.Diagnostic]) -> None:
+    owner = node.func.value
+    if not ((isinstance(owner, ast.Attribute) and owner.attr == "env")
+            or (isinstance(owner, ast.Name) and owner.id == "env")):
+        return
+    if not node.args:
+        return
+    arg = node.args[0]
+    if (isinstance(arg, ast.Constant) and isinstance(arg.value, str)
+            and not _known_xmlid(server, arg.value, module)):
+        out.append(_error(arg.lineno - 1, arg.col_offset, arg.end_col_offset,
+                          f"Unknown XMLID '{arg.value}' in env.ref(...)",
+                          "hmx-unknown-xmlid"))
+
+
 def _diagnose_python(server, content: str, module: str | None) -> list[types.Diagnostic]:
     try:
         tree = ast.parse(content)
     except SyntaxError:
         return []
 
-    out: list[types.Diagnostic] = []
+    class_out: list[types.Diagnostic] = []
+    env_out: list[types.Diagnostic] = []
+    todo = deque([tree])
+    pop = todo.popleft
+    push = todo.append
+    while todo:
+        node = pop()
+        for name in node._fields:
+            value = getattr(node, name, None)
+            if value.__class__ is list:
+                for item in value:
+                    if isinstance(item, ast.AST):
+                        push(item)
+            elif isinstance(value, ast.AST):
+                push(value)
 
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.ClassDef):
-            continue
-        model = _model_of_class(node)
-        if not model or not server.resolver.known(model):
-            continue
-
-        fields = server.resolver.fields(model)
-        methods = server.resolver.methods(model)
-
-        for item in node.body:
-            if isinstance(item, ast.Assign) and isinstance(item.value, ast.Call):
-                call = item.value
-                func = call.func
-                name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
-                if name in RELATIONAL and call.args:
-                    arg = call.args[0]
-                    if (isinstance(arg, ast.Constant) and isinstance(arg.value, str)
-                            and arg.value != "self"
-                            and not is_known_model(server.resolver, arg.value)):
-                        out.append(_error(arg.lineno - 1, arg.col_offset, arg.end_col_offset,
-                                          f"Unknown target model '{arg.value}' in {name}",
-                                          "hmx-unknown-model"))
-                for keyword in call.keywords:
-                    if keyword.arg not in ("compute", "inverse", "search"):
-                        continue
-                    value = keyword.value
-                    if (isinstance(value, ast.Constant) and isinstance(value.value, str)
-                            and value.value not in methods):
-                        out.append(_warn(value.lineno - 1, value.col_offset, value.end_col_offset,
-                                         f"Method '{value.value}' referenced by {keyword.arg}= "
-                                         f"is not defined on '{model}'",
-                                         "hmx-unknown-method"))
-
-            if not isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            for decorator in item.decorator_list:
-                if not isinstance(decorator, ast.Call):
-                    continue
-                func = decorator.func
-                if not (isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name)
-                        and func.value.id == "api"):
-                    continue
-                if func.attr not in ("depends", "onchange", "constrains"):
-                    continue
-                for arg in decorator.args:
-                    if not (isinstance(arg, ast.Constant) and isinstance(arg.value, str)):
-                        continue
-                    if is_domain_keyword(arg.value):
-                        continue
-                    current = model
-                    current_fields = fields
-                    for part in arg.value.split("."):
-                        if part not in current_fields:
-                            out.append(_error(
-                                arg.lineno - 1, arg.col_offset, arg.end_col_offset,
-                                f"Unknown field '{part}' on model '{current}' "
-                                f"in @api.{func.attr}",
-                                "hmx-unknown-field"))
-                            break
-                        nxt = server.resolver.comodel(current, part)
-                        if not nxt or not server.resolver.known(nxt):
-                            break
-                        current = nxt
-                        current_fields = server.resolver.fields(nxt)
-
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Subscript):
-            base = node.value
-            if (isinstance(base, ast.Attribute) and base.attr == "env"
-                    and isinstance(node.slice, ast.Constant)
-                    and isinstance(node.slice.value, str)
-                    and not is_known_model(server.resolver, node.slice.value)):
-                slot = node.slice
-                out.append(_error(slot.lineno - 1, slot.col_offset, slot.end_col_offset,
-                                  f"Unknown model '{slot.value}' in env[...]",
-                                  "hmx-unknown-model"))
-        elif isinstance(node, ast.Call):
+        cls = node.__class__
+        if cls is ast.Call:
             func = node.func
-            is_ref = (isinstance(func, ast.Attribute) and func.attr == "ref"
-                      and ((isinstance(func.value, ast.Attribute) and func.value.attr == "env")
-                           or (isinstance(func.value, ast.Name) and func.value.id == "env")))
-            if is_ref and node.args:
-                arg = node.args[0]
-                if (isinstance(arg, ast.Constant) and isinstance(arg.value, str)
-                        and not _known_xmlid(server, arg.value, module)):
-                    out.append(_error(arg.lineno - 1, arg.col_offset, arg.end_col_offset,
-                                      f"Unknown XMLID '{arg.value}' in env.ref(...)",
-                                      "hmx-unknown-xmlid"))
+            if func.__class__ is ast.Attribute and func.attr == "ref":
+                _env_ref_diagnostic(server, node, module, env_out)
+        elif cls is ast.Subscript:
+            base = node.value
+            if base.__class__ is ast.Attribute and base.attr == "env":
+                _env_model_diagnostic(server, node, env_out)
+        elif cls is ast.ClassDef:
+            _class_diagnostics(server, node, class_out)
 
-    return out
+    return class_out + env_out
 
 
 def _diagnose_csv(server, content: str, module: str | None) -> list[types.Diagnostic]:
