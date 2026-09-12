@@ -16,6 +16,7 @@ dependencies = [
     "lsprotocol>=2025.0.0",
     "lxml>=5.0.0",
     "mcp>=1.0.0,<2.0.0",
+    "typer",
     "tree-sitter>=0.22.0",
     "tree-sitter-language-pack>=0.2.0",
 ]
