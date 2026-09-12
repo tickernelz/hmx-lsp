@@ -40,7 +40,7 @@ the first hit:
 | 5 | Project-local directory | `<project>/.hmx/`, `<project>/bin/`, `<project>/tools/` |
 | 6 | User directory | `~/.hmx-lsp/bin/`, `~/.local/bin/`, `~/.cache/hmx-lsp/bin/` |
 | 7 | `PATH` | `hmx-lsp`, or `hmx-ls` |
-| 8 | Source checkout | falls back to `python -m hmx_ls.cli serve` when `hmx_ls/cli.py` is present |
+| 8 | Source checkout | runs `bin/hmx-ls serve` when `hmx_ls/cli.py` is present; the wrapper sets `PYTHONPATH` so the working directory does not matter |
 | 9 | GitHub release download | VS Code and Zed fetch the correct asset automatically |
 
 For a whole team the simplest setup is step 7: drop the binary on `PATH` once. For a repo-pinned
@@ -62,3 +62,23 @@ It exits non-zero when a runtime dependency is missing.
 Commands that need the HMX corpus resolve the root in this order: an explicit `--root`, the
 `HMX_ROOT` environment variable, then by walking up from the working directory looking for
 `hmx/module/`. The LSP server uses the editor's workspace root.
+
+## When a client reports startFailed
+
+Every candidate is probed with `--version` before it is used, and one that cannot run
+is skipped rather than selected, with the reason written to the client log. A client
+that still reports `startFailed` is almost always one of these:
+
+| Symptom in the log | Cause | Fix |
+|---|---|---|
+| `No module named 'hmx_ls'` | A checkout was found but its dependencies are missing | `pip install -r requirements.txt` in the checkout |
+| `ENOENT` | The configured path does not exist | Correct `hmx.server.path`, `HMX_LSP_PATH` or the VM option |
+| `EACCES` | The binary is not executable | `chmod +x` it |
+| `cannot execute binary file` | Wrong platform binary, commonly a Windows `.exe` under WSL | Download the asset for the platform the editor actually runs on |
+
+Confirm the server independently before blaming any client:
+
+```bash
+hmx-lsp --version
+hmx-lsp doctor
+```

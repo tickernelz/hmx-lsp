@@ -43,7 +43,11 @@ hmx-lsp setup jetbrains
 
 With neither set, the plugin still finds a binary in `<project>/.hmx/`, `<project>/bin/`,
 `<project>/tools/`, `~/.hmx-lsp/bin/`, `~/.local/bin/`, `~/.cache/hmx-lsp/bin/`, or on `PATH`.
-As a last resort it runs `python -m hmx_ls.cli serve` from a source checkout, using
+As a last resort it runs the repository wrapper `bin/hmx-ls serve` from a source
+checkout. The wrapper exports `PYTHONPATH` itself, so it does not depend on the
+IDE working directory. Earlier versions invoked `python -m hmx_ls.cli` directly and
+failed with `ModuleNotFoundError: No module named hmx_ls` whenever the working
+directory was not the checkout. It selects the interpreter using
 `-Dhmx.lsp.pythonPath` or `python3`/`python` from `PATH`.
 
 When nothing resolves, the plugin raises an error naming the exact asset it expected.
