@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from lsprotocol import types
 from pygls.workspace import Workspace
 
@@ -13,12 +14,12 @@ from hmx_ls.server import (
 )
 
 
-def test_server_initialization_and_queries(tmp_path):
-    server.protocol._workspace = Workspace(f"file://{tmp_path}")
+def test_server_initialization_and_queries(tmp_path: Path):
+    server.protocol._workspace = Workspace(tmp_path.as_uri())
 
     init_params = types.InitializeParams(
         capabilities=types.ClientCapabilities(),
-        root_uri=f"file://{tmp_path}",
+        root_uri=tmp_path.as_uri(),
     )
     result = on_initialize(init_params)
     assert result.capabilities.definition_provider is not None
@@ -44,7 +45,7 @@ def test_server_initialization_and_queries(tmp_path):
     </field>
 </record>"""
     xml_file.write_text(xml_content, encoding="utf-8")
-    uri = f"file://{xml_file}"
+    uri = xml_file.as_uri()
 
     pos = types.Position(line=4, character=26)
     comp = on_completion(types.CompletionParams(

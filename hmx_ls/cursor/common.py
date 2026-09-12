@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from urllib.parse import unquote, urlparse
+from urllib.request import url2pathname
 from lsprotocol import types
 from hmx_core.locations import Loc
 
@@ -11,9 +12,9 @@ def uri_to_path(uri: str) -> str:
     parsed = urlparse(uri)
     if parsed.scheme == "file":
         path = unquote(parsed.path)
-        if os.name == "nt" and len(path) > 2 and path[0] == "/" and path[2] == ":":
-            path = path[1:]
-        return os.path.abspath(path)
+        if parsed.netloc:
+            path = f"//{parsed.netloc}{path}"
+        return os.path.abspath(url2pathname(path))
     return uri
 
 
