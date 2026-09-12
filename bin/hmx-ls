@@ -1,3 +1,44 @@
-#!/bin/bash
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PYTHONPATH="$DIR" exec /opt/conda/envs/hmx/bin/python -m hmx_ls.cli "$@"
+#!/usr/bin/env bash
+set -euo pipefail
+
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  TARGET="$(readlink "$SOURCE")"
+  case "$TARGET" in
+    /*) SOURCE="$TARGET" ;;
+    *) SOURCE="$(cd -P "$(dirname "$SOURCE")" && pwd)/$TARGET" ;;
+  esac
+done
+ROOT="$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
+
+pick_python() {
+  if [ -n "${HMX_LSP_PYTHON:-}" ] && command -v "$HMX_LSP_PYTHON" >/dev/null 2>&1; then
+    echo "$HMX_LSP_PYTHON"
+    return 0
+  fi
+  if [ -n "${VIRTUAL_ENV:-}" ] && [ -x "$VIRTUAL_ENV/bin/python" ]; then
+    echo "$VIRTUAL_ENV/bin/python"
+    return 0
+  fi
+  for candidate in "$ROOT/.venv/bin/python" "$ROOT/venv/bin/python"; do
+    if [ -x "$candidate" ]; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+  for candidate in python3 python; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      command -v "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+if ! PYTHON="$(pick_python)"; then
+  echo "hmx-ls: no Python interpreter found. Set HMX_LSP_PYTHON or install python3." >&2
+  exit 127
+fi
+
+export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
+exec "$PYTHON" -m hmx_ls.cli "$@"

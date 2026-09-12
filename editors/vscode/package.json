@@ -1,7 +1,7 @@
 {
   "name": "hmx-lsp-vscode",
   "displayName": "HMX Language Server",
-  "description": "Cross-layer language intelligence for HMX (Python, XML, Webx JS/Vue, Security CSV)",
+  "description": "Cross-layer language intelligence for HMX (Python ORM, XML views, Webx JS/Vue, security CSV)",
   "version": "0.1.0",
   "publisher": "hashmicro",
   "engines": {
@@ -24,15 +24,25 @@
       "type": "object",
       "title": "HMX Language Server",
       "properties": {
+        "hmx.server.path": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Absolute path to the `hmx-lsp` executable. Leave empty to resolve automatically: `HMX_LSP_PATH` env var, extension-bundled binary, previously downloaded release, `hmx-lsp` on `PATH`, a local development checkout, then a GitHub release download."
+        },
+        "hmx.server.autoDownload": {
+          "type": "boolean",
+          "default": true,
+          "description": "Download the platform binary from GitHub releases when no local executable can be found."
+        },
+        "hmx.server.version": {
+          "type": "string",
+          "default": "latest",
+          "description": "Release tag to download. Use 'latest' for the newest published release."
+        },
         "hmx.pythonPath": {
           "type": "string",
-          "default": "/opt/conda/envs/hmx/bin/python",
-          "description": "Path to Python interpreter with pygls and hmx_ls installed."
-        },
-        "hmx.serverModule": {
-          "type": "string",
-          "default": "hmx_ls.server",
-          "description": "Module name to run for HMX Language Server."
+          "default": "",
+          "markdownDescription": "Python interpreter used only when running HMX-LS from a source checkout. Leave empty to use the Python extension's interpreter, then `python3`/`python` from `PATH`."
         },
         "hmx.trace.server": {
           "type": "string",
@@ -42,7 +52,7 @@
             "verbose"
           ],
           "default": "off",
-          "description": "Traces the communication between VS Code and the HMX language server."
+          "description": "Trace the JSON-RPC traffic between the editor and the HMX language server."
         }
       }
     },
@@ -50,6 +60,14 @@
       {
         "command": "hmx.restartServer",
         "title": "HMX: Restart Language Server"
+      },
+      {
+        "command": "hmx.updateServer",
+        "title": "HMX: Download or Update Language Server"
+      },
+      {
+        "command": "hmx.showServerPath",
+        "title": "HMX: Show Resolved Language Server Path"
       }
     ]
   },

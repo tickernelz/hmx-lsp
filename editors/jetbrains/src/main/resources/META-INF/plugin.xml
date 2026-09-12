@@ -1,12 +1,24 @@
 <idea-plugin>
     <id>com.hashmicro.hmx.lsp</id>
     <name>HMX Language Server</name>
-    <vendor>Hashmicro</vendor>
-    <description>Cross-layer language intelligence for HMX framework in PyCharm / IntelliJ IDEA</description>
+    <vendor email="dev@hashmicro.com" url="https://github.com/tickernelz/hmx-lsp">Hashmicro</vendor>
+
+    <description><![CDATA[
+        Cross-layer language intelligence for the HMX framework inside PyCharm and IntelliJ IDEA.
+        Resolves references across Python ORM models, XML views and data, Webx JS/Vue components,
+        and security CSV access rules.
+        <br/><br/>
+        The plugin locates the <code>hmx-lsp</code> executable automatically: the
+        <code>hmx.lsp.path</code> VM option, the <code>HMX_LSP_PATH</code> environment variable,
+        a project-local <code>.hmx/</code> directory, the user cache, <code>PATH</code>, and
+        finally a source checkout.
+    ]]></description>
 
     <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.python</depends>
 
     <extensions defaultExtensionNs="com.intellij">
-        <platform.lsp.serverSupportProvider implementation="com.hashmicro.hmx.lsp.HmxLspServerSupportProvider"/>
+        <platform.lsp.serverSupportProvider
+            implementation="com.hashmicro.hmx.lsp.HmxLspServerSupportProvider"/>
     </extensions>
 </idea-plugin>

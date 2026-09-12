@@ -1,11 +1,11 @@
 plugins {
     id("java")
-    id("org.jetbrains.kotlin.jvm") version "1.9.22"
-    id("org.jetbrains.intellij.platform") version "2.0.0"
+    id("org.jetbrains.kotlin.jvm") version "2.0.21"
+    id("org.jetbrains.intellij.platform") version "2.1.0"
 }
 
 group = "com.hashmicro.hmx"
-version = "0.1.0"
+version = providers.gradleProperty("pluginVersion").getOrElse("0.1.0")
 
 repositories {
     mavenCentral()
@@ -16,10 +16,26 @@ repositories {
 
 dependencies {
     intellijPlatform {
-        pycharmCommunity("2024.1")
+        pycharmProfessional(providers.gradleProperty("platformVersion").getOrElse("2024.2"))
     }
 }
 
 kotlin {
     jvmToolchain(17)
+}
+
+intellijPlatform {
+    pluginConfiguration {
+        ideaVersion {
+            sinceBuild = "242"
+            untilBuild = provider { null }
+        }
+    }
+    buildSearchableOptions = false
+}
+
+tasks {
+    buildSearchableOptions {
+        enabled = false
+    }
 }

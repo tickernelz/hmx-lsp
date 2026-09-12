@@ -12,10 +12,17 @@ class HmxLspServerDescriptor(project: Project) : ProjectWideLspServerDescriptor(
     }
 
     override fun createCommandLine(): GeneralCommandLine {
+        val resolved = HmxServerLocator.resolve(project)
+            ?: throw IllegalStateException(
+                "HMX language server not found. Set HMX_LSP_PATH, put ${HmxServerLocator.binaryName()} on PATH, " +
+                    "or place it at <project>/.hmx/${HmxServerLocator.binaryName()}."
+            )
+
         return GeneralCommandLine().apply {
-            exePath = "/opt/conda/envs/hmx/bin/python"
-            addParameters("-m", "hmx_ls.server")
-            setWorkDirectory(project.basePath)
+            exePath = resolved.command
+            addParameters(resolved.args)
+            withWorkDirectory(project.basePath)
+            withEnvironment("PYTHONUNBUFFERED", "1")
         }
     }
 }

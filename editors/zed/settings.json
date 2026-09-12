@@ -2,37 +2,23 @@
   "lsp": {
     "hmx-ls": {
       "binary": {
-        "path": "/opt/conda/envs/hmx/bin/python",
-        "arguments": [
-          "-m",
-          "hmx_ls.server"
-        ]
+        "path": "hmx-lsp",
+        "arguments": ["serve"]
       }
     }
   },
   "languages": {
     "XML": {
-      "language_servers": [
-        "hmx-ls"
-      ]
+      "language_servers": ["hmx-ls"]
     },
     "Python": {
-      "language_servers": [
-        "pyright",
-        "hmx-ls"
-      ]
+      "language_servers": ["pyright", "hmx-ls"]
     },
     "JavaScript": {
-      "language_servers": [
-        "vtsls",
-        "hmx-ls"
-      ]
+      "language_servers": ["vtsls", "hmx-ls"]
     },
     "Vue.js": {
-      "language_servers": [
-        "vue-language-server",
-        "hmx-ls"
-      ]
+      "language_servers": ["vue-language-server", "hmx-ls"]
     }
   }
 }
