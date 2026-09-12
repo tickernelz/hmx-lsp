@@ -1,0 +1,3 @@
+#!/bin/bash
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PYTHONPATH="$DIR" exec /opt/conda/envs/hmx/bin/python -m hmx_ls.cli "$@"

@@ -1,0 +1,12 @@
+<idea-plugin>
+    <id>com.hashmicro.hmx.lsp</id>
+    <name>HMX Language Server</name>
+    <vendor>Hashmicro</vendor>
+    <description>Cross-layer language intelligence for HMX framework in PyCharm / IntelliJ IDEA</description>
+
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <platform.lsp.serverSupportProvider implementation="com.hashmicro.hmx.lsp.HmxLspServerSupportProvider"/>
+    </extensions>
+</idea-plugin>

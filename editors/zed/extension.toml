@@ -1,0 +1,11 @@
+id = "hmx-lsp"
+name = "HMX Language Server"
+version = "0.1.0"
+schema_version = 1
+authors = ["Hashmicro <dev@hashmicro.com>"]
+description = "Cross-layer language server for HMX framework in Zed"
+repository = "https://git.hashmicro.com/hashmicro1/hmx/hmx-lsp"
+
+[language_servers.hmx-ls]
+name = "hmx-ls"
+language = ["Python", "XML", "JavaScript", "Vue.js"]

@@ -1,0 +1,58 @@
+from __future__ import annotations
+
+import os
+from lsprotocol import types
+from pygls.workspace import Workspace
+
+from hmx_ls.server import (
+    on_completion,
+    on_definition,
+    on_hover,
+    on_initialize,
+    server,
+)
+
+
+def test_server_initialization_and_queries(tmp_path):
+    server.protocol._workspace = Workspace(f"file://{tmp_path}")
+
+    init_params = types.InitializeParams(
+        capabilities=types.ClientCapabilities(),
+        root_uri=f"file://{tmp_path}",
+    )
+    result = on_initialize(init_params)
+    assert result.capabilities.definition_provider is not None
+    assert result.capabilities.hover_provider is not None
+    assert result.capabilities.completion_provider is not None
+
+    server.root = str(tmp_path)
+    emp = server.index.entry("hremployee")
+    emp.declared["name"] = None
+    server.resolver.invalidate()
+
+    xml_file = tmp_path / "test.xml"
+    xml_content = """<record id="v1" model="baseuiview">
+    <field name="model">hremployee</field>
+    <field name="arch" type="xml">
+        <form>
+            <field name="name" />
+        </form>
+    </field>
+</record>"""
+    xml_file.write_text(xml_content, encoding="utf-8")
+    uri = f"file://{xml_file}"
+
+    pos = types.Position(line=4, character=26)
+    comp = on_completion(types.CompletionParams(
+        text_document=types.TextDocumentIdentifier(uri=uri),
+        position=pos,
+    ))
+    labels = [i.label for i in comp.items]
+    assert "name" in labels
+
+    hover = on_hover(types.HoverParams(
+        text_document=types.TextDocumentIdentifier(uri=uri),
+        position=pos,
+    ))
+    assert hover is not None
+    assert "hremployee" in hover.contents.value

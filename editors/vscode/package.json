@@ -1,0 +1,68 @@
+{
+  "name": "hmx-lsp-vscode",
+  "displayName": "HMX Language Server",
+  "description": "Cross-layer language intelligence for HMX (Python, XML, Webx JS/Vue, Security CSV)",
+  "version": "0.1.0",
+  "publisher": "hashmicro",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters"
+  ],
+  "activationEvents": [
+    "onLanguage:python",
+    "onLanguage:xml",
+    "onLanguage:javascript",
+    "onLanguage:vue",
+    "workspaceContains:**/__hmx__.py"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "configuration": {
+      "type": "object",
+      "title": "HMX Language Server",
+      "properties": {
+        "hmx.pythonPath": {
+          "type": "string",
+          "default": "/opt/conda/envs/hmx/bin/python",
+          "description": "Path to Python interpreter with pygls and hmx_ls installed."
+        },
+        "hmx.serverModule": {
+          "type": "string",
+          "default": "hmx_ls.server",
+          "description": "Module name to run for HMX Language Server."
+        },
+        "hmx.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Traces the communication between VS Code and the HMX language server."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "hmx.restartServer",
+        "title": "HMX: Restart Language Server"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "tsc -p ./",
+    "watch": "tsc -w -p ./"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.3"
+  }
+}
