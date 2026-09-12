@@ -3,7 +3,14 @@ from __future__ import annotations
 import os
 import sys
 from lsprotocol import types
-from mcp.server.fastmcp import FastMCP
+
+try:
+    from mcp.server.fastmcp import FastMCP
+except (ModuleNotFoundError, ImportError):
+    try:
+        from mcp.server.mcpserver import MCPServer as FastMCP
+    except ImportError:
+        FastMCP = None
 
 from hmx_core.cache import load
 from hmx_core.index import Index, build, python_files
@@ -14,7 +21,7 @@ from hmx_ls.features.diagnostics import compute_diagnostics
 from hmx_ls.features.hover import resolve_hover
 from hmx_ls.features.references import resolve_references
 
-mcp = FastMCP("hmx-lsp")
+mcp = FastMCP("hmx-lsp") if FastMCP else None
 
 _ROOT = os.environ.get("HMX_ROOT") or os.getcwd()
 _INDEX: Index | None = None
@@ -45,7 +52,6 @@ def _get_server():
     return ServerBridge()
 
 
-@mcp.tool()
 def hmx_definition(file_path: str, line: int, col: int) -> list[dict]:
     s = _get_server()
     abs_path = os.path.abspath(file_path) if not os.path.isabs(file_path) else file_path
@@ -63,7 +69,6 @@ def hmx_definition(file_path: str, line: int, col: int) -> list[dict]:
     ]
 
 
-@mcp.tool()
 def hmx_hover(file_path: str, line: int, col: int) -> str:
     s = _get_server()
     abs_path = os.path.abspath(file_path) if not os.path.isabs(file_path) else file_path
@@ -73,7 +78,6 @@ def hmx_hover(file_path: str, line: int, col: int) -> str:
     return h.contents.value if h else "No hover information found."
 
 
-@mcp.tool()
 def hmx_model_info(model_name: str) -> dict:
     s = _get_server()
     norm = model_name.lower().replace(".", "").replace("_", "")
@@ -93,7 +97,6 @@ def hmx_model_info(model_name: str) -> dict:
     }
 
 
-@mcp.tool()
 def hmx_where_used(model_name: str, field_name: str = "") -> list[dict]:
     s = _get_server()
     norm = model_name.lower().replace(".", "").replace("_", "")
@@ -111,13 +114,13 @@ def hmx_where_used(model_name: str, field_name: str = "") -> list[dict]:
             for xid in s.index.xmlids.models.get(norm, []):
                 xe = s.index.xmlids.entries.get(xid)
                 if xe:
-                    results.append({"type": "xml_view_record", "xmlid": xid, "path": xe.loc.path, "line": xe.loc.line})
+                    x_loc = getattr(xe, "loc", xe)
+                    results.append({"type": "xml_view_record", "xmlid": xid, "path": x_loc.path, "line": x_loc.line})
             for acl in s.index.security.acls_for_model(norm):
                 results.append({"type": "security_csv", "path": acl.loc.path, "line": acl.loc.line})
     return results
 
 
-@mcp.tool()
 def hmx_diagnose(file_path: str) -> list[dict]:
     s = _get_server()
     abs_path = os.path.abspath(file_path) if not os.path.isabs(file_path) else file_path
@@ -135,8 +138,20 @@ def hmx_diagnose(file_path: str) -> list[dict]:
     ]
 
 
+if mcp:
+    mcp.tool()(hmx_definition)
+    mcp.tool()(hmx_hover)
+    mcp.tool()(hmx_model_info)
+    mcp.tool()(hmx_where_used)
+    mcp.tool()(hmx_diagnose)
+
+
 def run_mcp() -> None:
-    mcp.run()
+    if mcp:
+        mcp.run()
+    else:
+        print("Error: MCP server could not be initialized.")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
