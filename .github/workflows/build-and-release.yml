@@ -47,7 +47,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          pip install pygls lsprotocol lxml mcp tree-sitter tree-sitter-language-pack pyinstaller cython pytest anyio
+          pip install -r requirements.txt
 
       - name: Run test suite
         run: |
@@ -58,6 +58,7 @@ jobs:
         run: |
           python -m PyInstaller --onefile \
             --name hmx-lsp \
+            --paths . \
             --collect-all pygls \
             --collect-all lsprotocol \
             --collect-all lxml \
