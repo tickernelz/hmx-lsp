@@ -25,6 +25,10 @@ def test_server_initialization_and_queries(tmp_path):
     assert result.capabilities.hover_provider is not None
     assert result.capabilities.completion_provider is not None
 
+    server._index_ready.wait(timeout=2)
+    if server._bg_thread:
+        server._bg_thread.join(timeout=2)
+
     server.root = str(tmp_path)
     emp = server.index.entry("hremployee")
     emp.declared["name"] = None

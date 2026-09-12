@@ -29,12 +29,17 @@ class HmxLanguageServer(LanguageServer):
         self.resolver: Resolver = Resolver(self.index)
         self._index_ready: threading.Event = threading.Event()
         self._debounce_tasks: dict[str, asyncio.Task] = {}
+        self._bg_thread: threading.Thread | None = None
 
 
 server = HmxLanguageServer("hmx-ls", "0.1.0")
 
 
 def _bg_index_worker(ls: HmxLanguageServer, root: str) -> None:
+    if not root or not os.path.isdir(os.path.join(root, "hmx")):
+        ls._index_ready.set()
+        return
+
     py_paths = python_files(root)
     cached = load(root, py_paths)
     if cached is not None:
@@ -65,7 +70,9 @@ def on_initialize(params: types.InitializeParams) -> types.InitializeResult:
 
     server.root = os.path.abspath(root)
 
-    threading.Thread(target=_bg_index_worker, args=(server, server.root), daemon=True).start()
+    t = threading.Thread(target=_bg_index_worker, args=(server, server.root), daemon=True)
+    server._bg_thread = t
+    t.start()
 
     return types.InitializeResult(
         capabilities=types.ServerCapabilities(
