@@ -1,0 +1,7 @@
+.demo-card {
+    color: red;
+}
+
+.demo-card.is-active {
+    margin: 1.5rem;
+}

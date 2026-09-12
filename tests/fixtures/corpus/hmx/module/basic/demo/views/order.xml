@@ -1,0 +1,13 @@
+<hmx>
+    <record id="view_order_form" model="baseuiview">
+        <field name="model">saleorder</field>
+        <field name="arch" type="xml">
+            <form>
+                <field name="partner" widget="demowidget"/>
+                <field name="amount"/>
+                <field name="ghostfield"/>
+                <button name="action_confirm" type="object"/>
+            </form>
+        </field>
+    </record>
+</hmx>
