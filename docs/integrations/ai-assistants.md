@@ -1,69 +1,70 @@
-# AI Assistants Integration: Claude Code, Codex, and OMP
+# AI Assistants: Claude Code, Codex, OMP
 
-HMX-LS ships with a native Model Context Protocol (MCP) server (`hmx_ls/mcp.py`) and unified CLI (`bin/hmx-ls`) to give AI coding agents cross-layer superpowers.
+HMX-LS ships a Model Context Protocol server. Point the assistant at the `hmx-lsp` binary — no Python required.
 
-## 1. Claude Code
+Generate the exact snippet for your machine:
 
-Add HMX-LS to your project's `.mcp.json` or global `~/.claude/claude.json`:
+```bash
+hmx-lsp setup claude
+hmx-lsp setup codex
+hmx-lsp setup omp
+```
+
+## Claude Code
+
+```bash
+claude mcp add hmx-lsp hmx-lsp mcp
+```
+
+Or `.mcp.json`:
 
 ```json
 {
   "mcpServers": {
     "hmx-lsp": {
-      "command": "/opt/conda/envs/hmx/bin/python",
-      "args": ["-m", "hmx_ls.cli", "mcp"],
-      "env": {
-        "HMX_ROOT": "/path/to/hmx-002"
-      }
+      "command": "hmx-lsp",
+      "args": ["mcp"],
+      "env": { "HMX_ROOT": "/path/to/hmx-002" }
     }
   }
 }
 ```
 
-Or via CLI:
-```bash
-claude mcp add hmx-lsp /opt/conda/envs/hmx/bin/python -m hmx_ls.cli mcp
-```
-
-## 2. Codex (OpenAI)
-
-In your Codex configuration or `mcp_servers.json`:
+## Codex
 
 ```json
 {
   "mcp_servers": {
-    "hmx": {
-      "command": "/opt/conda/envs/hmx/bin/python",
-      "args": ["-m", "hmx_ls.cli", "mcp"],
-      "env": {
-        "HMX_ROOT": "/path/to/hmx-002"
-      }
+    "hmx-lsp": {
+      "command": "hmx-lsp",
+      "args": ["mcp"],
+      "env": { "HMX_ROOT": "/path/to/hmx-002" }
     }
   }
 }
 ```
 
-## 3. Oh My Pi (OMP)
-
-In `.omp/agent/config.yml` or `~/.omp/agent/config.yml`:
+## Oh My Pi (OMP)
 
 ```yaml
 mcp:
   servers:
     hmx:
-      command: /opt/conda/envs/hmx/bin/python
+      command: hmx-lsp
       args:
-        - -m
-        - hmx_ls.cli
         - mcp
       env:
-        HMX_ROOT: /home/zhafron/Works/HMX/hmx-002
+        HMX_ROOT: /path/to/hmx-002
 ```
 
-## Available AI Tools
+`HMX_ROOT` is optional — when omitted the server walks up from the working directory looking for `hmx/module/`.
 
-- `hmx_definition(file_path, line, col)`: Jump from XML/JS/CSV directly to Python definitions.
-- `hmx_hover(file_path, line, col)`: Extract Markdown documentation for fields, models, and decorators.
-- `hmx_model_info(model_name)`: Query composed fields, methods, and inheritance hierarchy.
-- `hmx_where_used(model_name, field_name)`: Search all usages across Python, XML, Webx, and CSV.
-- `hmx_diagnose(file_path)`: Run multi-layer diagnostics on any file and report issues.
+## Tools exposed
+
+| Tool | Purpose |
+|---|---|
+| `hmx_definition(file_path, line, col)` | Resolve a cross-layer reference to its declaration |
+| `hmx_hover(file_path, line, col)` | Markdown metadata for a field, model, widget, or decorator |
+| `hmx_model_info(model_name)` | Composed fields, methods, and inheritance chain |
+| `hmx_where_used(model_name, field_name)` | Usages across Python, XML, Webx, and security CSV |
+| `hmx_diagnose(file_path)` | Multi-layer validation for one file |
