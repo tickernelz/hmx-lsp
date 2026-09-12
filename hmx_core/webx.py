@@ -114,6 +114,50 @@ class WebxIndex:
         prefixed = f"hx-{name}"
         return prefixed in self.components or prefixed in self.templates
 
+    def forget_file(self, rel_path: str) -> None:
+        for key in self.by_file.pop(rel_path, []):
+            kind, _, name = key.partition(":")
+            if kind == "w":
+                self.widgets.pop(name, None)
+            elif kind == "c":
+                self.components.pop(name, None)
+            elif kind == "t":
+                self.templates.pop(name, None)
+            elif kind == "s":
+                self.stores.pop(name, None)
+            elif kind == "a":
+                self.actions.pop(name, None)
+            elif kind == "x":
+                kept = [loc for loc in self.extensions.get(name, [])
+                        if loc.path != rel_path]
+                if kept:
+                    self.extensions[name] = kept
+                else:
+                    self.extensions.pop(name, None)
+
+    def update_file(self, rel_path: str, abs_path: str) -> None:
+        self.forget_file(rel_path)
+        keys: list[str] = []
+        if rel_path.endswith(".js"):
+            widgets, comps = extract_js_file(abs_path, rel_path)
+            for widget in widgets:
+                self.widgets[widget.name] = widget
+                keys.append(f"w:{widget.name}")
+            for name, loc in comps:
+                comp = self.components.setdefault(name, ComponentEntry(name=name))
+                comp.js_loc = loc
+                keys.append(f"c:{name}")
+        elif rel_path.endswith(".vue"):
+            for name, loc in extract_vue_file(abs_path, rel_path):
+                comp = self.components.setdefault(name, ComponentEntry(name=name))
+                comp.vue_loc = loc
+                keys.append(f"c:{name}")
+        else:
+            return
+        keys += _absorb_extras(self, extract_js_extras(abs_path, rel_path))
+        if keys:
+            self.by_file[rel_path] = keys
+
     def known_store(self, name: str) -> bool:
         return bool(name) and name in self.stores
 
@@ -248,9 +292,9 @@ def scan_webx(root: str) -> WebxIndex:
                     comp = idx.components.setdefault(c_name, ComponentEntry(name=c_name))
                     comp.js_loc = loc
                     file_keys.append(f"c:{c_name}")
+                file_keys += _absorb_extras(idx, extract_js_extras(path, rel))
                 if file_keys:
                     idx.by_file[rel] = file_keys
-                _absorb_extras(idx, extract_js_extras(path, rel))
             elif f.endswith(".vue"):
                 t_list = extract_vue_file(path, rel)
                 vue_keys: list[str] = []
@@ -258,19 +302,25 @@ def scan_webx(root: str) -> WebxIndex:
                     comp = idx.components.setdefault(t_name, ComponentEntry(name=t_name))
                     comp.vue_loc = loc
                     vue_keys.append(f"c:{t_name}")
+                vue_keys += _absorb_extras(idx, extract_js_extras(path, rel))
                 if vue_keys:
                     idx.by_file[rel] = vue_keys
-                _absorb_extras(idx, extract_js_extras(path, rel))
 
     return idx
 
 
-def _absorb_extras(idx: WebxIndex, extras: dict[str, list[tuple[str, Loc]]]) -> None:
+def _absorb_extras(idx: WebxIndex, extras: dict[str, list[tuple[str, Loc]]]) -> list[str]:
+    keys: list[str] = []
     for name, loc in extras["templates"]:
         idx.templates.setdefault(name, loc)
+        keys.append(f"t:{name}")
     for name, loc in extras["stores"]:
         idx.stores.setdefault(name, StoreEntry(name=name, loc=loc))
+        keys.append(f"s:{name}")
     for name, loc in extras["actions"]:
         idx.actions.setdefault(name, loc)
+        keys.append(f"a:{name}")
     for name, loc in extras["extensions"]:
         idx.extensions.setdefault(name, []).append(loc)
+        keys.append(f"x:{name}")
+    return keys

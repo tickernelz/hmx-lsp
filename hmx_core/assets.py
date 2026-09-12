@@ -29,6 +29,28 @@ class AssetIndex:
     def known_bundle(self, name: str) -> bool:
         return bool(name) and name in self.bundles
 
+    def forget_file(self, rel_path: str) -> None:
+        for stale in self.by_file.pop(rel_path, []):
+            bucket = self.bundles.get(stale.bundle)
+            if bucket is not None:
+                self.bundles[stale.bundle] = [e for e in bucket if e is not stale]
+            owned = self.by_module.get(stale.module)
+            if owned is not None:
+                self.by_module[stale.module] = [e for e in owned if e is not stale]
+
+    def update_file(self, rel_path: str, abs_path: str) -> None:
+        self.forget_file(rel_path)
+        module_dir = os.path.dirname(abs_path)
+        names, entries = _collect(abs_path, rel_path, os.path.basename(module_dir))
+        for name in names:
+            self.bundles.setdefault(name, [])
+        for entry in entries:
+            entry.matches = len(glob.glob(os.path.join(module_dir, entry.pattern), recursive=True))
+            self.bundles.setdefault(entry.bundle, []).append(entry)
+            self.by_module.setdefault(entry.module, []).append(entry)
+        if entries:
+            self.by_file[rel_path] = entries
+
     def dead(self) -> list[AssetEntry]:
         return [e for entries in self.bundles.values() for e in entries if e.matches == 0]
 

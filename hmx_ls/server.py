@@ -149,6 +149,8 @@ def on_did_save(params: types.DidSaveTextDocumentParams) -> None:
     content = doc.source.encode("utf-8") if doc else b""
     affected = server.index.update_file(rel, content)
     server.resolver.invalidate(affected)
+    if rel.endswith((".css", ".scss")):
+        server._styles = None
     _publish(uri)
 
 

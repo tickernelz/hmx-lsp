@@ -32,6 +32,26 @@ class SecurityIndex:
     def acls_for_group(self, group_xmlid: str) -> list[AclEntry]:
         return self.by_group.get(group_xmlid, [])
 
+    def forget_file(self, rel_path: str) -> None:
+        for stale in self.by_file.pop(rel_path, []):
+            for bucket in (self.by_model, self.by_group):
+                for key, entries in list(bucket.items()):
+                    kept = [e for e in entries if e is not stale]
+                    if kept:
+                        bucket[key] = kept
+                    else:
+                        bucket.pop(key, None)
+
+    def update_file(self, rel_path: str, abs_path: str, module: str | None) -> None:
+        self.forget_file(rel_path)
+        entries = extract_acls_from_csv(abs_path, rel_path, module)
+        for entry in entries:
+            self.by_model.setdefault(entry.model, []).append(entry)
+            if entry.group_xmlid:
+                self.by_group.setdefault(entry.group_xmlid, []).append(entry)
+        if entries:
+            self.by_file[rel_path] = entries
+
 
 def normalize_model_id(raw: str) -> str:
     cleaned = raw.strip()

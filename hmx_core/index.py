@@ -65,6 +65,8 @@ class Index:
 
     def update_file(self, rel_path: str, content: bytes) -> set[str]:
         affected: set[str] = set()
+        if os.path.basename(rel_path) == "__hmx__.py":
+            self.assets.update_file(rel_path, os.path.join(self.root, rel_path))
         if rel_path.endswith(".py"):
             mod = owner_of(rel_path)
             try:
@@ -113,6 +115,11 @@ class Index:
                 fresh_ids.append(xentry.xmlid)
             self.xmlids.by_file[rel_path] = fresh_ids
             self._merge_records(rel_path, tree, mod)
+        elif rel_path.endswith((".js", ".vue")):
+            self.webx.update_file(rel_path, os.path.join(self.root, rel_path))
+        elif rel_path.endswith(".csv") and "security" in rel_path:
+            self.security.update_file(rel_path, os.path.join(self.root, rel_path),
+                                      owner_of(rel_path))
         return affected
 
     def _merge_records(self, rel_path: str, tree, module: str | None) -> None:
