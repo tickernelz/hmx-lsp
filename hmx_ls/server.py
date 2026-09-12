@@ -8,7 +8,8 @@ from lsprotocol import types
 from pygls.lsp.server import LanguageServer
 
 from hmx_core.cache import load, save
-from hmx_core.index import Index, build, python_files
+from hmx_core.index import Index, build, indexed_files
+from hmx_core.styles import StyleIndex, scan_styles
 from hmx_core.resolve import Resolver
 from hmx_ls import __version__
 from hmx_ls.cursor.common import safe_relpath, uri_to_path
@@ -38,6 +39,13 @@ class HmxLanguageServer(LanguageServer):
         self._index_ready: threading.Event = threading.Event()
         self._debounce_tasks: dict[str, asyncio.Task] = {}
         self._bg_thread: threading.Thread | None = None
+        self._styles: StyleIndex | None = None
+
+    @property
+    def styles(self) -> StyleIndex:
+        if self._styles is None:
+            self._styles = scan_styles(self.root) if self.root else StyleIndex()
+        return self._styles
 
 
 server = HmxLanguageServer("hmx-ls", __version__)
@@ -47,7 +55,7 @@ def _bg_index_worker(ls: HmxLanguageServer, root: str) -> None:
     try:
         if not root or not os.path.isdir(os.path.join(root, "hmx")):
             return
-        paths = python_files(root)
+        paths = indexed_files(root)
         cached = load(root, paths)
         if cached is not None:
             ls.index = cached

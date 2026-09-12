@@ -11,6 +11,7 @@ from .injection import DJANGO_USER_FIELDS, EXTERNAL_BASE_FIELDS, injected
 from .locations import Loc
 from .manifest import Module, discover, owner_of
 from .pysource import ClassDecl, computes_of, extract, kinds_of, selections_of
+from .assets import AssetIndex, scan_assets
 from .records import RecordsIndex, extract_records_from_tree, scan_records
 from .routes import RoutesIndex, scan_routes
 from .security import SecurityIndex, scan_security
@@ -48,6 +49,7 @@ class Index:
     routes: RoutesIndex = field(default_factory=RoutesIndex)
     security: SecurityIndex = field(default_factory=SecurityIndex)
     records: RecordsIndex = field(default_factory=RecordsIndex)
+    assets: AssetIndex = field(default_factory=AssetIndex)
     file_models: dict[str, list[str]] = field(default_factory=dict)
     root: str = ""
 
@@ -157,6 +159,22 @@ def xml_files(root: str) -> list[str]:
     for parent, dirs, names in os.walk(base):
         dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
         out += [os.path.join(parent, n) for n in names if n.endswith(".xml")]
+    return out
+
+
+INDEXED_SUFFIXES = (".py", ".xml", ".js", ".vue", ".csv", ".css", ".scss")
+DIGEST_SKIP_DIRS = SKIP_DIRS - {"static"}
+
+
+def indexed_files(root: str) -> list[str]:
+    out: list[str] = []
+    base = os.path.join(root, "hmx")
+    if not os.path.isdir(base):
+        return out
+    for parent, dirs, names in os.walk(base):
+        dirs[:] = [d for d in dirs if d not in DIGEST_SKIP_DIRS]
+        out += [os.path.join(parent, n) for n in names
+                if n.endswith(INDEXED_SUFFIXES)]
     return out
 
 
@@ -294,4 +312,5 @@ def build(root: str, workers: int | None = None) -> Index:
     index.webx = scan_webx(root)
     index.routes = scan_routes(root, py_paths)
     index.security = scan_security(root)
+    index.assets = scan_assets(root)
     return index
