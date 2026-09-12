@@ -11,12 +11,14 @@ repositories {
     mavenCentral()
     intellijPlatform {
         defaultRepositories()
+        intellijDependencies()
     }
 }
 
 dependencies {
     intellijPlatform {
         pycharmProfessional(providers.gradleProperty("platformVersion").getOrElse("2024.2"))
+        instrumentationTools()
     }
 }
 
