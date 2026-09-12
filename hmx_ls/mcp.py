@@ -138,12 +138,40 @@ def hmx_diagnose(file_path: str) -> list[dict]:
     ]
 
 
+TOOL_DESCRIPTIONS = {
+    "hmx_definition": (
+        "Jump from an HMX cross-layer reference to where it is declared. Give a file "
+        "path and a zero-based line and column pointing at a model name, a field name "
+        "in an XML view, an XMLID, a widget name, or a JS RPC payload key. Returns the "
+        "declaration sites, which usually live in a different language than the cursor."
+    ),
+    "hmx_hover": (
+        "Explain the HMX symbol at a position: for a field its type, target model and "
+        "declaring module; for a model its parents and composed field count; for an "
+        "XMLID the record it names. Use before editing an unfamiliar view or model."
+    ),
+    "hmx_model_info": (
+        "Describe one HMX model by name, such as 'hremployee' or 'hr.employee': its "
+        "declaration sites, inheritance parents, every composed field and method, and "
+        "the modules that contribute them. Use this to answer whether a field exists "
+        "on a model before writing a view, a domain or an ORM call."
+    ),
+    "hmx_where_used": (
+        "Find every reference to an HMX model, or to one field of it, across Python, "
+        "XML views, security CSV and Webx JS. Use before renaming or deleting, since "
+        "references cross file formats and a text search misses them."
+    ),
+    "hmx_diagnose": (
+        "Run the cross-layer checks over one file and return the findings: unknown "
+        "fields, models, methods, XMLIDs, groups and widgets, duplicate XMLIDs, dead "
+        "XML tags, and asset bundle globs that match nothing. Use to verify an edit "
+        "before proposing it."
+    ),
+}
+
 if mcp:
-    mcp.tool()(hmx_definition)
-    mcp.tool()(hmx_hover)
-    mcp.tool()(hmx_model_info)
-    mcp.tool()(hmx_where_used)
-    mcp.tool()(hmx_diagnose)
+    for _fn in (hmx_definition, hmx_hover, hmx_model_info, hmx_where_used, hmx_diagnose):
+        mcp.tool(description=TOOL_DESCRIPTIONS[_fn.__name__])(_fn)
 
 
 def run_mcp() -> None:
