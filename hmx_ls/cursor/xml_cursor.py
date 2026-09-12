@@ -111,6 +111,13 @@ def _expression_context(attr: str, value: str, col: int, value_start: int,
     return None
 
 
+def _class_token_at(value: str, offset: int) -> tuple[str, int, int] | None:
+    for match in re.finditer(r"[^\s]+", value):
+        if match.start() <= offset <= match.end():
+            return match.group(0), match.start(), match.end()
+    return None
+
+
 def resolve_xml_cursor(content: str, line: int, col: int,
                        resolver: Resolver | None = None) -> XmlCursorContext | None:
     lines = content.splitlines()
@@ -196,6 +203,15 @@ def resolve_xml_cursor(content: str, line: int, col: int,
     if attr_name == "tag" and tag == "field":
         return XmlCursorContext(kind="component", value=attr_value or "", active_model=model,
                                 attribute=attr_name, tag=tag, inherit_ref=inherit, range=span)
+
+    if attr_name == "class" and attr_value is not None:
+        token = _class_token_at(attr_value, col - value_start)
+        if token is None:
+            return None
+        name, start, end = token
+        return XmlCursorContext(kind="cssclass", value=name, active_model=model,
+                                attribute=attr_name, tag=tag, inherit_ref=inherit,
+                                range=((line, value_start + start), (line, value_start + end)))
 
     if attr_name:
         return XmlCursorContext(kind="unknown", value=attr_value or "", active_model=model,

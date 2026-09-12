@@ -42,6 +42,19 @@ def _model_sites(server, model: str | None) -> list[types.Location]:
             for s in entry.sites]
 
 
+def _style_locations(server, name: str) -> list[types.Location]:
+    index = getattr(server, "styles", None)
+    if index is None:
+        return []
+    out: list[types.Location] = []
+    for entry in index.declarations(name):
+        out.append(types.Location(
+            uri=path_to_uri(os.path.join(server.root, entry.loc.path)),
+            range=loc_to_range(entry.loc),
+        ))
+    return out
+
+
 def _xmlid(server, value: str, module: str | None) -> list[types.Location]:
     entry = server.index.xmlids.get(value, module)
     if entry:
@@ -134,6 +147,9 @@ def _from_xml(server, content: str, line: int, col: int, module: str | None) -> 
     ctx = resolve_xml_cursor(content, line, col, server.resolver)
     if ctx is None:
         return []
+
+    if ctx.kind == "cssclass":
+        return _style_locations(server, ctx.value)
 
     if ctx.kind == "xpath":
         return _xpath_target(server, ctx, module)

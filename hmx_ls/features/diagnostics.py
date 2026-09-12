@@ -8,6 +8,7 @@ import re
 from lsprotocol import types
 from lxml import etree
 
+from hmx_core.assets import assets_from_source
 from hmx_core.expressions import refs_for_attribute
 from hmx_core.manifest import owner_of
 from hmx_core.naming import is_domain_keyword, is_known_model, resolve_model
@@ -400,6 +401,22 @@ def _diagnose_js(server, content: str) -> list[types.Diagnostic]:
     return out
 
 
+def _diagnose_manifest(server, path: str, content: str) -> list[types.Diagnostic]:
+    module_dir = os.path.dirname(path)
+    rel = safe_relpath(path, server.root)
+    out: list[types.Diagnostic] = []
+    for entry in assets_from_source(content, rel, module_dir):
+        if entry.matches:
+            continue
+        line = max(0, entry.loc.line - 1)
+        start = max(0, entry.loc.col)
+        out.append(_warn(
+            line, start, start + len(entry.pattern) + 2,
+            f"Asset pattern '{entry.pattern}' in bundle '{entry.bundle}' matches no file",
+            "hmx-dead-asset"))
+    return out
+
+
 def compute_diagnostics(server, uri: str) -> list[types.Diagnostic]:
     path = uri_to_path(uri)
     doc = server.workspace.get_text_document(uri) if server.workspace else None
@@ -417,6 +434,8 @@ def compute_diagnostics(server, uri: str) -> list[types.Diagnostic]:
 
     if path.endswith(".xml"):
         return _diagnose_xml(server, content, module)
+    if os.path.basename(path) == "__hmx__.py":
+        return _diagnose_manifest(server, path, content)
     if path.endswith(".py"):
         return _diagnose_python(server, content, module)
     if path.endswith(".csv") and "security" in path:

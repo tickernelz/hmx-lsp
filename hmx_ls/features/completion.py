@@ -171,6 +171,22 @@ def _from_xml(server, content: str, line: int, col: int) -> types.CompletionList
     if ctx is None:
         return _empty()
 
+    if ctx.kind == "cssclass":
+        index = getattr(server, "styles", None)
+        if index is None:
+            return _empty()
+        prefix = ctx.value
+        if ctx.range:
+            typed = col - ctx.range[0][1]
+            if 0 <= typed <= len(ctx.value):
+                prefix = ctx.value[:typed]
+        names = index.prefixed(prefix, MAX_ITEMS)
+        items = [types.CompletionItem(label=name,
+                                      kind=types.CompletionItemKind.Color,
+                                      detail=f"{len(index.declarations(name))} declarations")
+                 for name in names]
+        return types.CompletionList(is_incomplete=len(items) >= MAX_ITEMS, items=items)
+
     if ctx.kind in ("field", "expr_field") and ctx.active_model:
         head, _, tail = ctx.value.rpartition(".")
         model = ctx.active_model
