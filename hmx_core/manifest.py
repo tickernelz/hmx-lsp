@@ -64,7 +64,7 @@ def discover(root: str) -> dict[str, Module]:
 
 
 def owner_of(rel_path: str) -> str | None:
-    parts = rel_path.split(os.sep)
+    parts = rel_path.replace("\\", "/").split("/")
     if len(parts) >= 4 and parts[0] == "hmx" and parts[1] == "module" and parts[2] in APP_ROOTS:
         return parts[3]
     return None

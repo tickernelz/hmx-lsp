@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from lsprotocol import types
 
 from hmx_core.index import Index
@@ -34,8 +35,8 @@ class MockServer:
         self.workspace = MockWorkspace(docs)
 
 
-def setup_advanced_mock_server() -> MockServer:
-    root = "/tmp/mock_adv"
+def setup_advanced_mock_server(base_dir: Path) -> MockServer:
+    root = str(base_dir)
     docs = {}
     server = MockServer(root, docs)
 
@@ -43,6 +44,21 @@ def setup_advanced_mock_server() -> MockServer:
     emp.declared["department_id"] = Loc("models/hr.py", 10, 4)
     emp.declared["salary"] = Loc("models/hr.py", 11, 4)
     server.index.file_models["models/hr.py"] = ["hremployee"]
+
+    p_file = base_dir / "views" / "parent_views.xml"
+    p_file.parent.mkdir(parents=True, exist_ok=True)
+    parent_xml = """<record id="view_parent" model="baseuiview">
+    <field name="model">hremployee</field>
+    <field name="arch" type="xml">
+        <form>
+            <field name="department_id" />
+            <field name="salary" />
+        </form>
+    </field>
+</record>"""
+    p_file.write_text(parent_xml, encoding="utf-8")
+    parent_uri = p_file.as_uri()
+    docs[parent_uri] = parent_xml
 
     server.index.xmlids.entries["core_hr.view_parent"] = XmlIdEntry(
         xmlid="core_hr.view_parent",
@@ -53,18 +69,7 @@ def setup_advanced_mock_server() -> MockServer:
     server.index.xmlids.by_file["views/parent_views.xml"] = ["core_hr.view_parent"]
     server.index.xmlids.by_file["views/child_views.xml"] = ["core_hr.view_child"]
 
-    parent_xml = """<record id="view_parent" model="baseuiview">
-    <field name="model">hremployee</field>
-    <field name="arch" type="xml">
-        <form>
-            <field name="department_id" />
-            <field name="salary" />
-        </form>
-    </field>
-</record>"""
-    parent_uri = "file:///tmp/mock_adv/views/parent_views.xml"
-    docs[parent_uri] = parent_xml
-
+    c_file = base_dir / "views" / "child_views.xml"
     child_xml = """<record id="view_child" model="baseuiview">
     <field name="model">hremployee</field>
     <field name="inherit" ref="core_hr.view_parent" />
@@ -74,9 +79,12 @@ def setup_advanced_mock_server() -> MockServer:
         </xpath>
     </field>
 </record>"""
-    child_uri = "file:///tmp/mock_adv/views/child_views.xml"
+    c_file.write_text(child_xml, encoding="utf-8")
+    child_uri = c_file.as_uri()
     docs[child_uri] = child_xml
 
+    m_file = base_dir / "models" / "hr.py"
+    m_file.parent.mkdir(parents=True, exist_ok=True)
     py_code = """class HrEmployee(models.Model):
     class Meta:
         name = "hremployee"
@@ -87,7 +95,8 @@ def setup_advanced_mock_server() -> MockServer:
     @api.depends("department_id", "salary")
     def _calc(self): pass
 """
-    py_uri = "file:///tmp/mock_adv/models/hr.py"
+    m_file.write_text(py_code, encoding="utf-8")
+    py_uri = m_file.as_uri()
     docs[py_uri] = py_code
 
     server.index.webx.widgets["statinfo"] = WidgetEntry("statinfo", "hx-stat-info", "form", Loc("js/stat.js", 1, 0))
@@ -97,16 +106,10 @@ def setup_advanced_mock_server() -> MockServer:
 
 
 def test_xpath_definition_target(tmp_path):
-    server = setup_advanced_mock_server()
-    server.root = str(tmp_path)
+    server = setup_advanced_mock_server(tmp_path)
+    c_file = tmp_path / "views" / "child_views.xml"
+    child_uri = c_file.as_uri()
 
-    p_file = tmp_path / "views" / "parent_views.xml"
-    p_file.parent.mkdir(parents=True, exist_ok=True)
-    p_file.write_text(server.workspace.docs["file:///tmp/mock_adv/views/parent_views.xml"], encoding="utf-8")
-
-    server.index.xmlids.entries["core_hr.view_parent"].loc = Loc(f"views/parent_views.xml", 2, 0)
-
-    child_uri = "file:///tmp/mock_adv/views/child_views.xml"
     pos = types.Position(line=4, character=25)
     locs = resolve_definition(server, child_uri, pos)
     assert len(locs) == 1
@@ -114,9 +117,10 @@ def test_xpath_definition_target(tmp_path):
     assert locs[0].range.start.line == 5
 
 
-def test_prepare_and_resolve_rename():
-    server = setup_advanced_mock_server()
-    py_uri = "file:///tmp/mock_adv/models/hr.py"
+def test_prepare_and_resolve_rename(tmp_path):
+    server = setup_advanced_mock_server(tmp_path)
+    m_file = tmp_path / "models" / "hr.py"
+    py_uri = m_file.as_uri()
     pos = types.Position(line=4, character=6)
 
     prep = prepare_rename(server, py_uri, pos)
@@ -128,21 +132,23 @@ def test_prepare_and_resolve_rename():
     assert py_uri in edit.changes
     assert any("dept_id" in change.new_text for change in edit.changes[py_uri])
 
-    child_uri = "file:///tmp/mock_adv/views/child_views.xml"
+    c_file = tmp_path / "views" / "child_views.xml"
+    child_uri = c_file.as_uri()
     assert child_uri in edit.changes
     assert any(change.new_text == "dept_id" for change in edit.changes[child_uri])
 
 
-def test_document_links_resolution():
-    server = setup_advanced_mock_server()
-    child_uri = "file:///tmp/mock_adv/views/child_views.xml"
+def test_document_links_resolution(tmp_path):
+    server = setup_advanced_mock_server(tmp_path)
+    c_file = tmp_path / "views" / "child_views.xml"
+    child_uri = c_file.as_uri()
     links = resolve_document_links(server, child_uri)
     assert len(links) >= 1
     assert any("parent_views.xml" in link.target for link in links)
 
 
-def test_code_actions_quickfix():
-    server = setup_advanced_mock_server()
+def test_code_actions_quickfix(tmp_path):
+    server = setup_advanced_mock_server(tmp_path)
     bad_xml = """<record id="v" model="baseuiview">
     <field name="model">hremployee</field>
     <field name="arch" type="xml">
@@ -151,7 +157,10 @@ def test_code_actions_quickfix():
         </form>
     </field>
 </record>"""
-    uri = "file:///tmp/mock_adv/views/bad.xml"
+    b_file = tmp_path / "views" / "bad.xml"
+    b_file.parent.mkdir(parents=True, exist_ok=True)
+    b_file.write_text(bad_xml, encoding="utf-8")
+    uri = b_file.as_uri()
     server.workspace.docs[uri] = bad_xml
 
     diag_widget = types.Diagnostic(

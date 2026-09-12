@@ -11,7 +11,7 @@ def uri_to_path(uri: str) -> str:
     parsed = urlparse(uri)
     if parsed.scheme == "file":
         path = unquote(parsed.path)
-        if os.name == "nt" and path.startswith("/") and len(path) > 2 and path[2] == ":":
+        if os.name == "nt" and len(path) > 2 and path[0] == "/" and path[2] == ":":
             path = path[1:]
         return os.path.abspath(path)
     return uri
@@ -22,6 +22,16 @@ def path_to_uri(path: str, root: str = "") -> str:
         path = os.path.join(root, path)
     abs_path = os.path.abspath(path)
     return Path(abs_path).as_uri()
+
+
+def safe_relpath(path: str, root: str = "") -> str:
+    if not root:
+        return path.replace("\\", "/")
+    try:
+        rel = os.path.relpath(path, root)
+    except ValueError:
+        rel = path
+    return rel.replace("\\", "/")
 
 
 def loc_to_range(loc: Loc) -> types.Range:
