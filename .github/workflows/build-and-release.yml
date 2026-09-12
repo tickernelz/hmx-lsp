@@ -29,7 +29,7 @@ jobs:
             runner: windows-latest
             bin_name: hmx-lsp-windows-x64.exe
           - platform: macos-x64
-            runner: macos-13
+            runner: macos-15-intel
             bin_name: hmx-lsp-darwin-x64
           - platform: macos-arm64
             runner: macos-14
