@@ -4,104 +4,133 @@ import ast
 import csv
 import os
 import re
+
 from lsprotocol import types
 from lxml import etree
 
+from hmx_core.expressions import refs_for_attribute
 from hmx_core.manifest import owner_of
-from hmx_core.security import normalize_model_id
-from hmx_ls.cursor.common import uri_to_path
-from hmx_ls.cursor.js_cursor import RE_API_URL, RE_CALL_KW_METHOD, RE_CALL_KW_MODEL
+from hmx_core.naming import is_domain_keyword, is_known_model, resolve_model
+from hmx_ls.cursor.common import safe_relpath, uri_to_path
+from hmx_ls.cursor.js_cursor import RE_API_URL, RE_METHOD_KEY, RE_MODEL_KEY
 
 DEAD_TAGS = {"template", "function", "delete", "report", "act_window", "value"}
 SUBVIEW_TAGS = {"list", "form", "search", "kanban", "pivot", "graph", "calendar",
                 "activity", "gantt", "hierarchy", "quick", "tree"}
-RELATIONAL_FIELDS = {"ForeignKey", "OneToOneField", "ManyToManyField"}
-SYNTH_MODEL_RE = re.compile(r"^(?:[a-zA-Z0-9_]+\.)?model_([a-zA-Z0-9_]+)$")
-SYNTH_FIELD_RE = re.compile(r"^(?:[a-zA-Z0-9_]+\.)?field_([a-zA-Z0-9_]+)__([a-zA-Z0-9_]+)$")
-BUILTIN_ENV_MODELS = {"user", "group", "contenttype", "permission"}
+RELATIONAL = {"ForeignKey", "OneToOneField", "ManyToManyField"}
+EXPR_ATTRS = ("domain", "attrs", "context", "options", "default_order", "order",
+              "invisible", "readonly", "required", "column_invisible")
+XMLID_ATTRS = ("ref", "action", "inherit")
+SYNTH_MODEL = re.compile(r"^(?:[a-zA-Z0-9_]+\.)?model_([a-zA-Z0-9_]+)$")
+SYNTH_FIELD = re.compile(r"^(?:[a-zA-Z0-9_]+\.)?field_([a-zA-Z0-9_]+)__([a-zA-Z0-9_]+)$")
+SKIP_MODIFIER_VALUES = {"1", "0", "true", "false", "True", "False"}
 
 
-def compute_diagnostics(server, uri: str) -> list[types.Diagnostic]:
-    path = uri_to_path(uri)
-    doc = server.workspace.get_text_document(uri)
-    content = doc.source if doc else ""
-    if not content and os.path.isfile(path):
-        try:
-            with open(path, "r", encoding="utf-8", errors="replace") as fh:
-                content = fh.read()
-        except OSError:
-            return []
-
-    if not content:
-        return []
-
-    rel_path = os.path.relpath(path, server.root) if server.root else path
-    current_module = owner_of(rel_path)
-
-    if path.endswith(".xml"):
-        return _diagnose_xml(server, content, current_module)
-    if path.endswith(".py"):
-        return _diagnose_python(server, content, current_module)
-    if path.endswith(".csv") and "security" in path:
-        return _diagnose_csv(server, content, current_module)
-    if path.endswith(".js"):
-        return _diagnose_js(server, content)
-
-    return []
+def _diag(line: int, start: int, end: int, message: str, code: str,
+          severity: types.DiagnosticSeverity) -> types.Diagnostic:
+    return types.Diagnostic(
+        range=types.Range(
+            start=types.Position(line=max(0, line), character=max(0, start)),
+            end=types.Position(line=max(0, line), character=max(start + 1, end)),
+        ),
+        message=message,
+        severity=severity,
+        code=code,
+        source="hmx-ls",
+    )
 
 
-def _is_valid_xmlid_ref(server, ref: str, current_module: str | None) -> bool:
-    if server.index.xmlids.get(ref, current_module):
+def _error(line: int, start: int, end: int, message: str, code: str) -> types.Diagnostic:
+    return _diag(line, start, end, message, code, types.DiagnosticSeverity.Error)
+
+
+def _warn(line: int, start: int, end: int, message: str, code: str) -> types.Diagnostic:
+    return _diag(line, start, end, message, code, types.DiagnosticSeverity.Warning)
+
+
+def _attr_offset(lines: list[str], line: int, attr: str, value: str) -> tuple[int, int]:
+    if not 0 <= line < len(lines):
+        return 0, 40
+    text = lines[line]
+    for quote in ('"', "'"):
+        at = text.find(f"{attr}={quote}")
+        if at != -1:
+            start = at + len(attr) + 2
+            return start, start + len(value)
+    at = text.find(value)
+    if at != -1:
+        return at, at + len(value)
+    return 0, 40
+
+
+def _known_xmlid(server, ref: str, module: str | None) -> bool:
+    if not ref or ref.startswith("%") or ref.startswith("$"):
         return True
-    m_match = SYNTH_MODEL_RE.match(ref)
-    if m_match:
-        norm = normalize_model_id(m_match.group(1))
-        if server.resolver.known(norm) or norm in BUILTIN_ENV_MODELS:
+    if server.index.xmlids.get(ref, module):
+        return True
+    records = server.index.records
+    if records.action(ref, module) or records.group(ref, module) or records.menu(ref, module):
+        return True
+    if ref in records.rules or ref in records.reports or ref in records.sequences:
+        return True
+    match = SYNTH_MODEL.match(ref)
+    if match and is_known_model(server.resolver, match.group(1)):
+        return True
+    match = SYNTH_FIELD.match(ref)
+    if match:
+        model = resolve_model(server.resolver, match.group(1))
+        if model and match.group(2) in server.resolver.fields(model):
             return True
-    f_match = SYNTH_FIELD_RE.match(ref)
-    if f_match:
-        norm = normalize_model_id(f_match.group(1))
-        field_name = f_match.group(2)
-        if server.resolver.known(norm):
-            fields = server.resolver.fields(norm)
-            if field_name in fields:
-                return True
     return False
 
 
-def _diagnose_xml(server, content: str, current_module: str | None) -> list[types.Diagnostic]:
-    diags: list[types.Diagnostic] = []
+def _check_expressions(server, elem, line: int, lines: list[str], model: str | None,
+                       module: str | None) -> list[types.Diagnostic]:
+    out: list[types.Diagnostic] = []
+    for attr in EXPR_ATTRS:
+        value = elem.get(attr)
+        if not value or value.strip() in SKIP_MODIFIER_VALUES:
+            continue
+        base, _ = _attr_offset(lines, line, attr, value)
+        for ref in refs_for_attribute(attr, value):
+            start, end = base + ref.start, base + ref.end
+            if ref.kind == "field":
+                if not model or not server.resolver.known(model):
+                    continue
+                if is_domain_keyword(ref.path):
+                    continue
+                head = ref.path.split(".")[0]
+                if head in server.resolver.fields(model):
+                    continue
+                out.append(_error(
+                    line, start, end,
+                    f"Unknown field '{head}' on model '{model}' in {attr}=",
+                    "hmx-unknown-field"))
+            elif ref.kind == "xmlid" and not _known_xmlid(server, ref.path, module):
+                out.append(_error(
+                    line, start, end,
+                    f"Unknown reference '{ref.path}' in {attr}=",
+                    "hmx-unknown-xmlid"))
+    return out
+
+
+def _diagnose_xml(server, content: str, module: str | None) -> list[types.Diagnostic]:
     try:
         root = etree.fromstring(content.encode("utf-8"))
-    except etree.XMLSyntaxError as e:
-        line = max(0, (e.lineno or 1) - 1)
-        return [types.Diagnostic(
-            range=types.Range(
-                start=types.Position(line=line, character=0),
-                end=types.Position(line=line, character=80),
-            ),
-            message=str(e),
-            severity=types.DiagnosticSeverity.Error,
-            code="hmx-xml-syntax-error",
-            source="hmx-ls",
-        )]
+    except etree.XMLSyntaxError as error:
+        line = max(0, (error.lineno or 1) - 1)
+        return [_error(line, 0, 80, str(error), "hmx-xml-syntax-error")]
 
-    seen_ids: set[tuple[str, str]] = set()
+    lines = content.splitlines()
+    out: list[types.Diagnostic] = []
+    seen: set[tuple[str, str]] = set()
 
     for child in root:
-        tag = child.tag
-        if isinstance(tag, str) and tag in DEAD_TAGS:
+        if isinstance(child.tag, str) and child.tag in DEAD_TAGS:
             line = max(0, getattr(child, "sourceline", 1) - 1)
-            diags.append(types.Diagnostic(
-                range=types.Range(
-                    start=types.Position(line=line, character=0),
-                    end=types.Position(line=line, character=40),
-                ),
-                message=f"Tag <{tag}> is dropped by the HMX XML loader",
-                severity=types.DiagnosticSeverity.Warning,
-                code="hmx-dead-tag",
-                source="hmx-ls",
-            ))
+            out.append(_warn(line, 0, 40,
+                             f"Tag <{child.tag}> is silently dropped by the HMX XML loader",
+                             "hmx-dead-tag"))
 
     for elem in root.iter():
         if not isinstance(elem.tag, str):
@@ -111,339 +140,287 @@ def _diagnose_xml(server, content: str, current_module: str | None) -> list[type
         raw_id = elem.get("id")
         if raw_id:
             key = (elem.tag, raw_id)
-            if key in seen_ids:
-                diags.append(types.Diagnostic(
-                    range=types.Range(
-                        start=types.Position(line=line, character=0),
-                        end=types.Position(line=line, character=40),
-                    ),
-                    message=f"Duplicate XMLID declaration '{raw_id}' in this file",
-                    severity=types.DiagnosticSeverity.Error,
-                    code="hmx-duplicate-xmlid",
-                    source="hmx-ls",
-                ))
-            else:
-                seen_ids.add(key)
+            if key in seen:
+                start, end = _attr_offset(lines, line, "id", raw_id)
+                out.append(_error(line, start, end,
+                                  f"Duplicate XMLID '{raw_id}' declared twice in this file",
+                                  "hmx-duplicate-xmlid"))
+            seen.add(key)
 
-        groups_val = elem.get("groups")
-        if groups_val:
-            for g in groups_val.split(","):
-                group_name = g.strip()
-                if group_name and group_name != "base.group_no_one":
-                    if not server.index.xmlids.get(group_name, current_module):
-                        diags.append(types.Diagnostic(
-                            range=types.Range(
-                                start=types.Position(line=line, character=0),
-                                end=types.Position(line=line, character=60),
-                            ),
-                            message=f"Unknown security group '{group_name}'",
-                            severity=types.DiagnosticSeverity.Error,
-                            code="hmx-unknown-group",
-                            source="hmx-ls",
-                        ))
+        groups = elem.get("groups")
+        if groups:
+            base, _ = _attr_offset(lines, line, "groups", groups)
+            for ref in refs_for_attribute("groups", groups):
+                if not _known_xmlid(server, ref.path, module):
+                    out.append(_error(line, base + ref.start, base + ref.end,
+                                      f"Unknown security group '{ref.path}'",
+                                      "hmx-unknown-group"))
 
-        ref_val = elem.get("ref") or elem.get("action")
-        if ref_val and elem.tag != "xpath":
-            if not ref_val.startswith("%") and not _is_valid_xmlid_ref(server, ref_val, current_module):
-                diags.append(types.Diagnostic(
-                    range=types.Range(
-                        start=types.Position(line=line, character=0),
-                        end=types.Position(line=line, character=60),
-                    ),
-                    message=f"Unknown XMLID reference '{ref_val}'",
-                    severity=types.DiagnosticSeverity.Error,
-                    code="hmx-unknown-xmlid",
-                    source="hmx-ls",
-                ))
+        attrs = XMLID_ATTRS + (("parent",) if elem.tag == "menuitem" else ())
+        for attr in attrs:
+            value = elem.get(attr)
+            if value and elem.tag != "xpath" and not _known_xmlid(server, value, module):
+                start, end = _attr_offset(lines, line, attr, value)
+                out.append(_error(line, start, end,
+                                  f"Unknown reference '{value}' in {attr}=",
+                                  "hmx-unknown-xmlid"))
 
-    def check_arch(node, current_model: str):
+    def walk(node, model: str) -> None:
         for child in node:
             if not isinstance(child.tag, str):
                 continue
             line = max(0, getattr(child, "sourceline", 1) - 1)
+            descend_into = model
+
             if child.tag == "field":
-                fname = child.get("name")
-                if fname:
-                    fields = server.resolver.fields(current_model)
-                    if fname not in fields:
-                        diags.append(types.Diagnostic(
-                            range=types.Range(
-                                start=types.Position(line=line, character=0),
-                                end=types.Position(line=line, character=60),
-                            ),
-                            message=f"Unknown field '{fname}' on model '{current_model}'",
-                            severity=types.DiagnosticSeverity.Error,
-                            code="hmx-unknown-field",
-                            source="hmx-ls",
-                        ))
+                name = child.get("name")
+                if name:
+                    head = name.split(".")[0]
+                    if head not in server.resolver.fields(model):
+                        start, end = _attr_offset(lines, line, "name", name)
+                        out.append(_error(line, start, end,
+                                          f"Unknown field '{name}' on model '{model}'",
+                                          "hmx-unknown-field"))
+                    elif any(isinstance(g.tag, str) and g.tag in SUBVIEW_TAGS for g in child):
+                        target = server.resolver.comodel(model, head)
+                        if target and server.resolver.known(target):
+                            descend_into = target
+
                 widget = child.get("widget")
                 if widget and not server.index.webx.known_widget(widget):
-                    diags.append(types.Diagnostic(
-                        range=types.Range(
-                            start=types.Position(line=line, character=0),
-                            end=types.Position(line=line, character=60),
-                        ),
-                        message=f"Unknown widget '{widget}'",
-                        severity=types.DiagnosticSeverity.Warning,
-                        code="hmx-unknown-widget",
-                        source="hmx-ls",
-                    ))
+                    start, end = _attr_offset(lines, line, "widget", widget)
+                    out.append(_warn(line, start, end,
+                                     f"Unknown widget '{widget}'",
+                                     "hmx-unknown-widget"))
 
-                if fname and any(isinstance(g.tag, str) and g.tag in SUBVIEW_TAGS for g in child):
-                    target = server.resolver.comodel(current_model, fname.split(".")[0])
-                    if target and server.resolver.known(target):
-                        check_arch(child, target)
-                        continue
+            elif child.tag == "button":
+                name = child.get("name")
+                kind = child.get("type")
+                if (name and kind != "action" and not name.startswith("%(")
+                        and name not in server.resolver.methods(model)):
+                    start, end = _attr_offset(lines, line, "name", name)
+                    out.append(_error(line, start, end,
+                                      f"Unknown method '{name}' on model '{model}'",
+                                      "hmx-unknown-method"))
 
-            check_arch(child, current_model)
+            out.extend(_check_expressions(server, child, line, lines, model, module))
+            walk(child, descend_into)
 
     for record in root.iter("record"):
         if record.get("model") != "baseuiview":
             continue
-        model_name = None
-        arch_node = None
-        for f in record:
-            if isinstance(f.tag, str) and f.tag == "field":
-                if f.get("name") == "model":
-                    model_name = (f.text or "").strip() or None
-                elif f.get("name") == "arch":
-                    arch_node = f
+        raw_model = None
+        arch = None
+        for child in record:
+            if not isinstance(child.tag, str) or child.tag != "field":
+                continue
+            if child.get("name") == "model":
+                raw_model = (child.get("ref") or (child.text or "").strip()) or None
+            elif child.get("name") == "arch":
+                arch = child
+        if not raw_model or arch is None:
+            continue
+        model = resolve_model(server.resolver, raw_model)
+        if model is None:
+            line = max(0, getattr(record, "sourceline", 1) - 1)
+            out.append(_error(line, 0, 60,
+                              f"Unknown model '{raw_model}' referenced by this view",
+                              "hmx-unknown-model"))
+            continue
+        walk(arch, model)
 
-        if model_name and arch_node is not None:
-            norm_view_model = normalize_model_id(model_name)
-            if not server.resolver.known(norm_view_model):
-                line = max(0, getattr(record, "sourceline", 1) - 1)
-                diags.append(types.Diagnostic(
-                    range=types.Range(
-                        start=types.Position(line=line, character=0),
-                        end=types.Position(line=line, character=60),
-                    ),
-                    message=f"Unknown model '{model_name}' referenced in view",
-                    severity=types.DiagnosticSeverity.Error,
-                    code="hmx-unknown-model",
-                    source="hmx-ls",
-                ))
-            else:
-                check_arch(arch_node, norm_view_model)
-
-    return diags
+    return out
 
 
-def _diagnose_python(server, content: str, current_module: str | None) -> list[types.Diagnostic]:
-    diags: list[types.Diagnostic] = []
+def _model_of_class(node: ast.ClassDef) -> str | None:
+    for item in node.body:
+        if not isinstance(item, ast.ClassDef) or item.name != "Meta":
+            continue
+        for stmt in item.body:
+            if not isinstance(stmt, ast.Assign):
+                continue
+            for target in stmt.targets:
+                if (isinstance(target, ast.Name) and target.id == "name"
+                        and isinstance(stmt.value, ast.Constant)
+                        and isinstance(stmt.value.value, str)):
+                    return stmt.value.value.lower()
+    return None
+
+
+def _diagnose_python(server, content: str, module: str | None) -> list[types.Diagnostic]:
     try:
         tree = ast.parse(content)
     except SyntaxError:
         return []
 
+    out: list[types.Diagnostic] = []
+
     for node in ast.walk(tree):
-        if isinstance(node, ast.ClassDef):
-            model_name = None
-            for item in node.body:
-                if isinstance(item, ast.ClassDef) and item.name == "Meta":
-                    for stmt in item.body:
-                        if isinstance(stmt, ast.Assign):
-                            for target in stmt.targets:
-                                if isinstance(target, ast.Name) and target.id == "name":
-                                    if isinstance(stmt.value, ast.Constant) and isinstance(stmt.value.value, str):
-                                        model_name = stmt.value.value.lower()
-            if not model_name or not server.resolver.known(model_name):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        model = _model_of_class(node)
+        if not model or not server.resolver.known(model):
+            continue
+
+        fields = server.resolver.fields(model)
+        methods = server.resolver.methods(model)
+
+        for item in node.body:
+            if isinstance(item, ast.Assign) and isinstance(item.value, ast.Call):
+                call = item.value
+                func = call.func
+                name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+                if name in RELATIONAL and call.args:
+                    arg = call.args[0]
+                    if (isinstance(arg, ast.Constant) and isinstance(arg.value, str)
+                            and arg.value != "self"
+                            and not is_known_model(server.resolver, arg.value)):
+                        out.append(_error(arg.lineno - 1, arg.col_offset, arg.end_col_offset,
+                                          f"Unknown target model '{arg.value}' in {name}",
+                                          "hmx-unknown-model"))
+                for keyword in call.keywords:
+                    if keyword.arg not in ("compute", "inverse", "search"):
+                        continue
+                    value = keyword.value
+                    if (isinstance(value, ast.Constant) and isinstance(value.value, str)
+                            and value.value not in methods):
+                        out.append(_warn(value.lineno - 1, value.col_offset, value.end_col_offset,
+                                         f"Method '{value.value}' referenced by {keyword.arg}= "
+                                         f"is not defined on '{model}'",
+                                         "hmx-unknown-method"))
+
+            if not isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
-
-            for item in node.body:
-                if isinstance(item, ast.Assign) and isinstance(item.value, ast.Call):
-                    call = item.value
-                    func_name = call.func.attr if isinstance(call.func, ast.Attribute) else getattr(call.func, "id", "")
-                    if func_name in RELATIONAL_FIELDS and call.args:
-                        arg0 = call.args[0]
-                        if isinstance(arg0, ast.Constant) and isinstance(arg0.value, str):
-                            raw_target = arg0.value
-                            if raw_target != "self":
-                                target_model = raw_target.split(".")[-1].lower()
-                                if not server.resolver.known(target_model) and target_model not in BUILTIN_ENV_MODELS:
-                                    line = max(0, arg0.lineno - 1)
-                                    diags.append(types.Diagnostic(
-                                        range=types.Range(
-                                            start=types.Position(line=line, character=arg0.col_offset),
-                                            end=types.Position(line=line, character=arg0.end_col_offset),
-                                        ),
-                                        message=f"Unknown target model '{target_model}' in {func_name}",
-                                        severity=types.DiagnosticSeverity.Error,
-                                        code="hmx-unknown-model",
-                                        source="hmx-ls",
-                                    ))
-
-                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    for dec in item.decorator_list:
-                        if isinstance(dec, ast.Call):
-                            func = dec.func
-                            if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and func.value.id == "api":
-                                dec_name = func.attr
-                                if dec_name in ("depends", "onchange", "constrains"):
-                                    for arg in dec.args:
-                                        if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-                                            path_parts = arg.value.split(".")
-                                            curr = model_name
-                                            for part in path_parts:
-                                                fields = server.resolver.fields(curr)
-                                                if part not in fields:
-                                                    line = max(0, arg.lineno - 1)
-                                                    diags.append(types.Diagnostic(
-                                                        range=types.Range(
-                                                            start=types.Position(line=line, character=arg.col_offset),
-                                                            end=types.Position(line=line, character=arg.end_col_offset),
-                                                        ),
-                                                        message=f"Unknown field '{part}' on model '{curr}' in @api.{dec_name}",
-                                                        severity=types.DiagnosticSeverity.Error,
-                                                        code="hmx-unknown-field",
-                                                        source="hmx-ls",
-                                                    ))
-                                                    break
-                                                curr = server.resolver.comodel(curr, part)
-                                                if not curr:
-                                                    break
+            for decorator in item.decorator_list:
+                if not isinstance(decorator, ast.Call):
+                    continue
+                func = decorator.func
+                if not (isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name)
+                        and func.value.id == "api"):
+                    continue
+                if func.attr not in ("depends", "onchange", "constrains"):
+                    continue
+                for arg in decorator.args:
+                    if not (isinstance(arg, ast.Constant) and isinstance(arg.value, str)):
+                        continue
+                    if is_domain_keyword(arg.value):
+                        continue
+                    current = model
+                    current_fields = fields
+                    for part in arg.value.split("."):
+                        if part not in current_fields:
+                            out.append(_error(
+                                arg.lineno - 1, arg.col_offset, arg.end_col_offset,
+                                f"Unknown field '{part}' on model '{current}' "
+                                f"in @api.{func.attr}",
+                                "hmx-unknown-field"))
+                            break
+                        nxt = server.resolver.comodel(current, part)
+                        if not nxt or not server.resolver.known(nxt):
+                            break
+                        current = nxt
+                        current_fields = server.resolver.fields(nxt)
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Subscript):
             base = node.value
-            is_env = isinstance(base, ast.Attribute) and base.attr == "env"
-            if is_env and isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str):
-                target_model = node.slice.value.split(".")[-1].lower()
-                if not server.resolver.known(target_model) and target_model not in BUILTIN_ENV_MODELS:
-                    line = max(0, node.slice.lineno - 1)
-                    diags.append(types.Diagnostic(
-                        range=types.Range(
-                            start=types.Position(line=line, character=node.slice.col_offset),
-                            end=types.Position(line=line, character=node.slice.end_col_offset),
-                        ),
-                        message=f"Unknown model '{target_model}' in env[...]",
-                        severity=types.DiagnosticSeverity.Error,
-                        code="hmx-unknown-model",
-                        source="hmx-ls",
-                    ))
-
-        if isinstance(node, ast.Call):
+            if (isinstance(base, ast.Attribute) and base.attr == "env"
+                    and isinstance(node.slice, ast.Constant)
+                    and isinstance(node.slice.value, str)
+                    and not is_known_model(server.resolver, node.slice.value)):
+                slot = node.slice
+                out.append(_error(slot.lineno - 1, slot.col_offset, slot.end_col_offset,
+                                  f"Unknown model '{slot.value}' in env[...]",
+                                  "hmx-unknown-model"))
+        elif isinstance(node, ast.Call):
             func = node.func
-            is_env_ref = isinstance(func, ast.Attribute) and func.attr == "ref" and (
-                (isinstance(func.value, ast.Attribute) and func.value.attr == "env") or
-                (isinstance(func.value, ast.Name) and func.value.id == "env")
-            )
-            if is_env_ref and node.args:
-                arg0 = node.args[0]
-                if isinstance(arg0, ast.Constant) and isinstance(arg0.value, str):
-                    xid = arg0.value
-                    if not _is_valid_xmlid_ref(server, xid, current_module):
-                        line = max(0, arg0.lineno - 1)
-                        diags.append(types.Diagnostic(
-                            range=types.Range(
-                                start=types.Position(line=line, character=arg0.col_offset),
-                                end=types.Position(line=line, character=arg0.end_col_offset),
-                            ),
-                            message=f"Unknown XMLID '{xid}' in env.ref(...)",
-                            severity=types.DiagnosticSeverity.Error,
-                            code="hmx-unknown-xmlid",
-                            source="hmx-ls",
-                        ))
+            is_ref = (isinstance(func, ast.Attribute) and func.attr == "ref"
+                      and ((isinstance(func.value, ast.Attribute) and func.value.attr == "env")
+                           or (isinstance(func.value, ast.Name) and func.value.id == "env")))
+            if is_ref and node.args:
+                arg = node.args[0]
+                if (isinstance(arg, ast.Constant) and isinstance(arg.value, str)
+                        and not _known_xmlid(server, arg.value, module)):
+                    out.append(_error(arg.lineno - 1, arg.col_offset, arg.end_col_offset,
+                                      f"Unknown XMLID '{arg.value}' in env.ref(...)",
+                                      "hmx-unknown-xmlid"))
 
-    return diags
+    return out
 
 
-def _diagnose_csv(server, content: str, current_module: str | None) -> list[types.Diagnostic]:
-    diags: list[types.Diagnostic] = []
-    lines = content.splitlines()
-    reader = csv.reader(lines)
-    header = None
-    for row_num, row in enumerate(reader, start=1):
-        if not row or not any(row):
+def _diagnose_csv(server, content: str, module: str | None) -> list[types.Diagnostic]:
+    out: list[types.Diagnostic] = []
+    rows = list(csv.reader(content.splitlines()))
+    for number, row in enumerate(rows[1:], start=1):
+        if len(row) < 4 or not any(row):
             continue
-        if header is None:
-            header = [c.strip().lower() for c in row]
-            continue
-        if len(row) < 4:
-            continue
-        model_col = row[2].strip()
-        group_col = row[3].strip() or None
-
-        norm_model = normalize_model_id(model_col)
-        if not server.resolver.known(norm_model) and norm_model not in BUILTIN_ENV_MODELS:
-            diags.append(types.Diagnostic(
-                range=types.Range(
-                    start=types.Position(line=row_num - 1, character=0),
-                    end=types.Position(line=row_num - 1, character=40),
-                ),
-                message=f"Unknown model '{norm_model}' in security ACL",
-                severity=types.DiagnosticSeverity.Error,
-                code="hmx-unknown-model",
-                source="hmx-ls",
-            ))
-
-        if group_col and not server.index.xmlids.get(group_col, current_module):
-            diags.append(types.Diagnostic(
-                range=types.Range(
-                    start=types.Position(line=row_num - 1, character=0),
-                    end=types.Position(line=row_num - 1, character=40),
-                ),
-                message=f"Unknown group '{group_col}' in security ACL",
-                severity=types.DiagnosticSeverity.Error,
-                code="hmx-unknown-group",
-                source="hmx-ls",
-            ))
-
-    return diags
+        raw_model = row[2].strip()
+        group = row[3].strip()
+        if raw_model and not is_known_model(server.resolver, raw_model):
+            out.append(_error(number, 0, 40,
+                              f"Unknown model '{raw_model}' in security ACL",
+                              "hmx-unknown-model"))
+        if group and not _known_xmlid(server, group, module):
+            out.append(_error(number, 0, 40,
+                              f"Unknown group '{group}' in security ACL",
+                              "hmx-unknown-group"))
+    return out
 
 
 def _diagnose_js(server, content: str) -> list[types.Diagnostic]:
-    diags: list[types.Diagnostic] = []
-    lines = content.splitlines()
-    for line_idx, line_str in enumerate(lines):
-        for m in RE_CALL_KW_MODEL.finditer(line_str):
-            model_name = m.group(2).split(".")[-1].lower()
-            if not server.resolver.known(model_name) and model_name not in BUILTIN_ENV_MODELS:
-                diags.append(types.Diagnostic(
-                    range=types.Range(
-                        start=types.Position(line=line_idx, character=m.start(2)),
-                        end=types.Position(line=line_idx, character=m.end(2)),
-                    ),
-                    message=f"Unknown model '{model_name}' in call_kw",
-                    severity=types.DiagnosticSeverity.Error,
-                    code="hmx-unknown-model",
-                    source="hmx-ls",
-                ))
+    out: list[types.Diagnostic] = []
+    for number, text in enumerate(content.splitlines()):
+        model = None
+        for match in RE_MODEL_KEY.finditer(text):
+            resolved = resolve_model(server.resolver, match.group(2))
+            if resolved is None and not is_known_model(server.resolver, match.group(2)):
+                out.append(_error(number, match.start(2), match.end(2),
+                                  f"Unknown model '{match.group(2)}' in RPC payload",
+                                  "hmx-unknown-model"))
+            model = resolved
+            break
 
-        for m in RE_CALL_KW_METHOD.finditer(line_str):
-            method_name = m.group(2)
-            model_name = None
-            for mm in RE_CALL_KW_MODEL.finditer(line_str):
-                model_name = mm.group(2).split(".")[-1].lower()
-                break
-            if model_name and (server.resolver.known(model_name) or model_name in BUILTIN_ENV_MODELS):
-                methods = server.resolver.methods(model_name)
-                if method_name not in methods and not method_name.startswith("_"):
-                    diags.append(types.Diagnostic(
-                        range=types.Range(
-                            start=types.Position(line=line_idx, character=m.start(2)),
-                            end=types.Position(line=line_idx, character=m.end(2)),
-                        ),
-                        message=f"Unknown method '{method_name}' on model '{model_name}' (or inherited classes) in call_kw",
-                        severity=types.DiagnosticSeverity.Error,
-                        code="hmx-unknown-method",
-                        source="hmx-ls",
-                    ))
+        if model:
+            methods = server.resolver.methods(model)
+            for match in RE_METHOD_KEY.finditer(text):
+                name = match.group(2)
+                if name and not name.startswith("_") and name not in methods:
+                    out.append(_error(number, match.start(2), match.end(2),
+                                      f"Unknown method '{name}' on model '{model}'",
+                                      "hmx-unknown-method"))
 
-        for m in RE_API_URL.finditer(line_str):
-            url_path = m.group(2)
-            if url_path.startswith("/hmx_api/") and not url_path.startswith("/hmx_api/web/"):
-                route = server.index.routes.get("ANY", url_path)
-                if not route:
-                    diags.append(types.Diagnostic(
-                        range=types.Range(
-                            start=types.Position(line=line_idx, character=m.start(2)),
-                            end=types.Position(line=line_idx, character=m.end(2)),
-                        ),
-                        message=f"Unregistered API route '{url_path}'",
-                        severity=types.DiagnosticSeverity.Warning,
-                        code="hmx-unknown-route",
-                        source="hmx-ls",
-                    ))
+        for match in RE_API_URL.finditer(text):
+            url = match.group(2)
+            if not url.startswith("/hmx_api/") or url.startswith("/hmx_api/web/"):
+                continue
+            if server.index.routes.get("ANY", url) is None:
+                out.append(_warn(number, match.start(2), match.end(2),
+                                 f"Unregistered API route '{url}'",
+                                 "hmx-unknown-route"))
+    return out
 
-    return diags
+
+def compute_diagnostics(server, uri: str) -> list[types.Diagnostic]:
+    path = uri_to_path(uri)
+    doc = server.workspace.get_text_document(uri) if server.workspace else None
+    content = doc.source if doc else ""
+    if not content and os.path.isfile(path):
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                content = fh.read()
+        except OSError:
+            return []
+    if not content:
+        return []
+
+    module = owner_of(safe_relpath(path, server.root))
+
+    if path.endswith(".xml"):
+        return _diagnose_xml(server, content, module)
+    if path.endswith(".py"):
+        return _diagnose_python(server, content, module)
+    if path.endswith(".csv") and "security" in path:
+        return _diagnose_csv(server, content, module)
+    if path.endswith(".js"):
+        return _diagnose_js(server, content)
+    return []

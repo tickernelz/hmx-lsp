@@ -5,15 +5,17 @@ import os
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 
+from lxml import etree
+
 from .injection import DJANGO_USER_FIELDS, EXTERNAL_BASE_FIELDS, injected
 from .locations import Loc
 from .manifest import Module, discover, owner_of
-from .pysource import ClassDecl, extract
+from .pysource import ClassDecl, computes_of, extract, kinds_of, selections_of
+from .records import RecordsIndex, extract_records_from_tree, scan_records
 from .routes import RoutesIndex, scan_routes
 from .security import SecurityIndex, scan_security
-from .webx import WebxIndex, extract_js_file, extract_vue_file, scan_webx
+from .webx import WebxIndex, scan_webx
 from .xmlids import XmlIdIndex, extract_xmlids_from_tree, scan_xmlids
-from lxml import etree
 
 SKIP_DIRS = {"node_modules", ".git", "__pycache__", "test-results", "static",
              ".ruff_cache", ".pytest_cache", ".hmx-ls"}
@@ -30,6 +32,11 @@ class ModelEntry:
     edges: set[str] = field(default_factory=set)
     sites: list[Loc] = field(default_factory=list)
     methods: dict[str, Loc] = field(default_factory=dict)
+    kinds: dict[str, str] = field(default_factory=dict)
+    selections: dict[str, list[str]] = field(default_factory=dict)
+    computes: dict[str, str] = field(default_factory=dict)
+    ordering: list[str] = field(default_factory=list)
+    rec_name: str | None = None
 
 
 @dataclass
@@ -40,6 +47,7 @@ class Index:
     webx: WebxIndex = field(default_factory=WebxIndex)
     routes: RoutesIndex = field(default_factory=RoutesIndex)
     security: SecurityIndex = field(default_factory=SecurityIndex)
+    records: RecordsIndex = field(default_factory=RecordsIndex)
     file_models: dict[str, list[str]] = field(default_factory=dict)
     root: str = ""
 
@@ -54,53 +62,84 @@ class Index:
         return model in self.models
 
     def update_file(self, rel_path: str, content: bytes) -> set[str]:
-        affected_models: set[str] = set()
+        affected: set[str] = set()
         if rel_path.endswith(".py"):
             mod = owner_of(rel_path)
             try:
                 decls, _ = extract(content, rel_path, mod)
-            except (SyntaxError, OSError):
-                return affected_models
-            old_models = self.file_models.get(rel_path, [])
-            affected_models.update(old_models)
-            for m in old_models:
-                if m in self.models:
-                    self.models[m].sites = [s for s in self.models[m].sites if s.path != rel_path]
-                    self.models[m].declared = {k: v for k, v in self.models[m].declared.items() if v.path != rel_path}
-                    self.models[m].methods = {k: v for k, v in self.models[m].methods.items() if v.path != rel_path}
-            new_models = []
-            for d in decls:
-                entry = self.entry(d.model)
-                entry.sites.append(d.loc)
-                new_models.append(d.model)
-                affected_models.add(d.model)
-                for m_name, m_loc in d.methods.items():
-                    entry.methods[m_name] = m_loc
-                for fd in d.fields:
+            except (SyntaxError, OSError, ValueError):
+                return affected
+            for stale in self.file_models.get(rel_path, []):
+                affected.add(stale)
+                got = self.models.get(stale)
+                if got is None:
+                    continue
+                got.sites = [s for s in got.sites if s.path != rel_path]
+                got.declared = {k: v for k, v in got.declared.items() if v.path != rel_path}
+                got.methods = {k: v for k, v in got.methods.items() if v.path != rel_path}
+            fresh: list[str] = []
+            for decl in decls:
+                entry = self.entry(decl.model)
+                entry.sites.append(decl.loc)
+                fresh.append(decl.model)
+                affected.add(decl.model)
+                entry.edges |= set(decl.parents) | set(decl.delegates)
+                entry.methods.update(decl.methods)
+                entry.kinds.update(kinds_of(decl))
+                entry.selections.update(selections_of(decl))
+                entry.computes.update(computes_of(decl))
+                if decl.ordering:
+                    entry.ordering = list(decl.ordering)
+                if decl.rec_name:
+                    entry.rec_name = decl.rec_name
+                for fd in decl.fields:
                     entry.declared[fd.name] = fd.loc
                     if fd.comodel:
                         entry.comodel[fd.name] = fd.comodel
-            self.file_models[rel_path] = new_models
+            self.file_models[rel_path] = fresh
         elif rel_path.endswith(".xml"):
             try:
                 tree = etree.fromstring(content)
-                mod = owner_of(rel_path)
-                entries = extract_xmlids_from_tree(tree, rel_path, mod)
-                old_ids = self.xmlids.by_file.get(rel_path, [])
-                for oid in old_ids:
-                    self.xmlids.entries.pop(oid, None)
-                new_ids = []
-                for e in entries:
-                    self.xmlids.entries[e.xmlid] = e
-                    new_ids.append(e.xmlid)
-                self.xmlids.by_file[rel_path] = new_ids
-            except (etree.XMLSyntaxError, OSError):
-                pass
-        return affected_models
+            except (etree.XMLSyntaxError, ValueError):
+                return affected
+            mod = owner_of(rel_path)
+            for stale in self.xmlids.by_file.get(rel_path, []):
+                self.xmlids.entries.pop(stale, None)
+            fresh_ids: list[str] = []
+            for xentry in extract_xmlids_from_tree(tree, rel_path, mod):
+                self.xmlids.entries[xentry.xmlid] = xentry
+                fresh_ids.append(xentry.xmlid)
+            self.xmlids.by_file[rel_path] = fresh_ids
+            self._merge_records(rel_path, tree, mod)
+        return affected
+
+    def _merge_records(self, rel_path: str, tree, module: str | None) -> None:
+        try:
+            fresh = extract_records_from_tree(tree, rel_path, module)
+        except Exception:
+            return
+        for stale in self.records.by_file.get(rel_path, []):
+            for bucket in (self.records.actions, self.records.rules, self.records.groups,
+                           self.records.menus, self.records.crons, self.records.reports,
+                           self.records.sequences):
+                bucket.pop(stale, None)
+        self.records.actions.update(fresh.actions)
+        self.records.rules.update(fresh.rules)
+        self.records.groups.update(fresh.groups)
+        self.records.menus.update(fresh.menus)
+        self.records.crons.update(fresh.crons)
+        self.records.reports.update(fresh.reports)
+        self.records.sequences.update(fresh.sequences)
+        for model, xmlids in fresh.by_model.items():
+            existing = self.records.by_model.setdefault(model, [])
+            for xmlid in xmlids:
+                if xmlid not in existing:
+                    existing.append(xmlid)
+        self.records.by_file[rel_path] = fresh.by_file.get(rel_path, [])
 
 
 def python_files(root: str) -> list[str]:
-    out = []
+    out: list[str] = []
     base = os.path.join(root, "hmx")
     if not os.path.isdir(base):
         return out
@@ -111,7 +150,7 @@ def python_files(root: str) -> list[str]:
 
 
 def xml_files(root: str) -> list[str]:
-    out = []
+    out: list[str] = []
     base = os.path.join(root, "hmx", "module")
     if not os.path.isdir(base):
         return out
@@ -128,7 +167,7 @@ def scan(paths: list[str]) -> tuple[list[ClassDecl], set[str]]:
         rel = os.path.relpath(path, _ROOT)
         try:
             decls, found = extract(open(path, "rb").read(), rel, owner_of(rel))
-        except (SyntaxError, OSError):
+        except (SyntaxError, OSError, ValueError):
             continue
         out += decls
         factories |= found
@@ -162,7 +201,8 @@ def keep_model_classes(decls: list[ClassDecl]) -> list[ClassDecl]:
         verdict[name] = found
         return found
 
-    return [d for d in decls if d.direct_model or d.django_user or is_model(d.class_name, frozenset())]
+    return [d for d in decls
+            if d.direct_model or d.django_user or is_model(d.class_name, frozenset())]
 
 
 def apply_class_edges(decls: list[ClassDecl]) -> None:
@@ -194,8 +234,18 @@ def assemble(decls: list[ClassDecl], modules: dict[str, Module],
         entry.sites.append(decl.loc)
         entry.edges |= set(decl.parents) | set(decl.delegates)
         index.file_models.setdefault(decl.loc.path, []).append(decl.model)
-        for m_name, m_loc in decl.methods.items():
-            entry.methods.setdefault(m_name, m_loc)
+        for name, loc in decl.methods.items():
+            entry.methods.setdefault(name, loc)
+        for name, kind in kinds_of(decl).items():
+            entry.kinds.setdefault(name, kind)
+        for name, choices in selections_of(decl).items():
+            entry.selections.setdefault(name, choices)
+        for name, method in computes_of(decl).items():
+            entry.computes.setdefault(name, method)
+        if decl.ordering and not entry.ordering:
+            entry.ordering = list(decl.ordering)
+        if decl.rec_name and entry.rec_name is None:
+            entry.rec_name = decl.rec_name
         active = modules[decl.module].active_rule if decl.module in modules else False
         if decl.django_user:
             for name in DJANGO_USER_FIELDS:
@@ -227,7 +277,7 @@ def build(root: str, workers: int | None = None) -> Index:
     workers = workers or os.cpu_count() or 4
     decls: list[ClassDecl] = []
     factories: set[str] = set()
-    if workers > 1:
+    if workers > 1 and len(py_paths) > workers:
         chunks = [py_paths[i::workers] for i in range(workers)]
         with ProcessPoolExecutor(max_workers=workers, mp_context=_context(),
                                  initializer=_init, initargs=(root,)) as pool:
@@ -240,6 +290,7 @@ def build(root: str, workers: int | None = None) -> Index:
     index = assemble(decls, modules, factories)
     index.root = root
     index.xmlids = scan_xmlids(xml_paths, root)
+    index.records = scan_records(xml_paths, root)
     index.webx = scan_webx(root)
     index.routes = scan_routes(root, py_paths)
     index.security = scan_security(root)

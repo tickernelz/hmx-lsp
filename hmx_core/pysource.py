@@ -22,6 +22,13 @@ class FieldDecl:
     comodel: str | None = None
     related_name: str | None = None
     delegate: bool = False
+    compute: str | None = None
+    inverse: str | None = None
+    search_method: str | None = None
+    domain: str | None = None
+    choices: list[str] = field(default_factory=list)
+    string: str | None = None
+    company_dependent: bool = False
 
 
 @dataclass
@@ -52,6 +59,11 @@ class ClassDecl:
     alias: str | None = None
     active_name: str | None = "active"
     auto_rule: bool | None = None
+    ordering: list[str] = field(default_factory=list)
+    rec_name: str | None = None
+    company_field: str | None = None
+    branch_field: str | None = None
+    unique_together: list[list[str]] = field(default_factory=list)
 
 
 def normalize(name: str) -> str:
@@ -75,17 +87,34 @@ def _keyword(call: ast.Call, name: str):
 
 
 class Constants:
-    """Folds module-level constants so Meta.name = CONSTANT resolves."""
+    """Folds module-level and class-level constants so Meta.name = CONSTANT resolves."""
 
     def __init__(self, tree: ast.Module):
         self.table: dict[str, object] = {}
-        for st in tree.body:
-            if isinstance(st, ast.Assign) and isinstance(st.value, ast.Constant):
+        self.sequences: dict[str, ast.List | ast.Tuple] = {}
+        self.absorb(tree.body)
+
+    def absorb(self, body) -> None:
+        for st in body:
+            if not isinstance(st, ast.Assign):
+                continue
+            if isinstance(st.value, ast.Constant):
                 value = st.value.value
                 if isinstance(value, (str, bool)):
                     for target in st.targets:
                         if isinstance(target, ast.Name):
                             self.table[target.id] = value
+            elif isinstance(st.value, (ast.List, ast.Tuple)):
+                for target in st.targets:
+                    if isinstance(target, ast.Name):
+                        self.sequences[target.id] = st.value
+
+    def scoped(self, node: ast.ClassDef) -> "Constants":
+        child = Constants(ast.Module(body=[], type_ignores=[]))
+        child.table = dict(self.table)
+        child.sequences = dict(self.sequences)
+        child.absorb(node.body)
+        return child
 
     def string(self, node) -> str | None:
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
@@ -119,12 +148,100 @@ class Constants:
             return flag
         return True if isinstance(node, ast.Dict) else None
 
+    def sequence(self, node) -> ast.List | ast.Tuple | None:
+        if isinstance(node, (ast.List, ast.Tuple)):
+            return node
+        if isinstance(node, ast.Name):
+            return self.sequences.get(node.id)
+        return None
+
+    def string_list(self, node) -> list[str]:
+        seq = self.sequence(node)
+        if seq is None:
+            return self.strings(node)
+        return [s for s in (self.string(e) for e in seq.elts) if s]
+
+    def choices(self, node) -> list[str]:
+        seq = self.sequence(node)
+        if seq is None:
+            return []
+        out: list[str] = []
+        for elt in seq.elts:
+            if not isinstance(elt, (ast.Tuple, ast.List)) or len(elt.elts) != 2:
+                continue
+            text = _literal_text(elt.elts[0])
+            if text is not None:
+                out.append(text)
+        return out
+
+    def groups(self, node) -> list[list[str]]:
+        seq = self.sequence(node)
+        if seq is None:
+            return []
+        nested = [e for e in seq.elts if isinstance(e, (ast.Tuple, ast.List))]
+        if nested:
+            out = []
+            for e in nested:
+                names = [s for s in (self.string(x) for x in e.elts) if s]
+                if names:
+                    out.append(names)
+            return out
+        flat = [s for s in (self.string(e) for e in seq.elts) if s]
+        return [flat] if flat else []
+
+
+def _literal_text(node) -> str | None:
+    if not isinstance(node, ast.Constant):
+        return None
+    value = node.value
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return str(value)
+    return None
+
+
+def _text(node, const: Constants) -> str | None:
+    found = const.string(node)
+    if found:
+        return found
+    if isinstance(node, ast.Call) and len(node.args) == 1:
+        return const.string(node.args[0])
+    return None
+
+
+def _method_ref(node, const: Constants) -> str | None:
+    found = const.string(node)
+    if found:
+        return found
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return None
+
 
 def _unparse(node) -> str:
     try:
         return ast.unparse(node)
     except Exception:
         return ""
+
+
+def _scoped_field(value, const: Constants, default: str) -> str | None:
+    found = const.string(value)
+    if found:
+        return found
+    if isinstance(value, ast.Dict):
+        for key, item in zip(value.keys, value.values):
+            if isinstance(key, ast.Constant) and key.value in ("name", "field_name"):
+                named = const.string(item)
+                if named:
+                    return named
+        return default
+    return None
 
 
 def _read_meta(node: ast.ClassDef, const: Constants, decl: ClassDecl) -> tuple[str | None, bool]:
@@ -159,6 +276,16 @@ def _read_meta(node: ast.ClassDef, const: Constants, decl: ClassDecl) -> tuple[s
                     decl.alias = const.string(value)
                 elif key == "active_name":
                     decl.active_name = const.string(value)
+                elif key == "ordering":
+                    decl.ordering = const.string_list(value)
+                elif key in ("rec_name", "_rec_name"):
+                    decl.rec_name = const.string(value)
+                elif key == "company_field":
+                    decl.company_field = _scoped_field(value, const, "company")
+                elif key == "branch_field":
+                    decl.branch_field = _scoped_field(value, const, "branch")
+                elif key == "unique_together":
+                    decl.unique_together = const.groups(value)
     return meta_name, declared
 
 
@@ -176,8 +303,45 @@ def _read_field(st: ast.Assign, const: Constants, rel: str) -> list[FieldDecl]:
     related_name = const.string(rn_node) if rn_node is not None else None
     dl_node = _keyword(call, "delegate")
     delegate = bool(const.boolean(dl_node)) if dl_node is not None else False
-    return [FieldDecl(t.id, ctor, Loc(rel, st.lineno), comodel, related_name, delegate)
+    extra = _read_field_extras(call, const)
+    return [FieldDecl(t.id, ctor, Loc(rel, st.lineno), comodel, related_name, delegate, **extra)
             for t in st.targets if isinstance(t, ast.Name)]
+
+
+def _read_field_extras(call: ast.Call, const: Constants) -> dict:
+    compute = inverse = search_method = domain = string = None
+    choices: list[str] = []
+    company_dependent = False
+    for kw in call.keywords:
+        if kw.arg == "compute":
+            compute = _method_ref(kw.value, const)
+        elif kw.arg == "inverse":
+            inverse = _method_ref(kw.value, const)
+        elif kw.arg == "search":
+            search_method = _method_ref(kw.value, const)
+        elif kw.arg == "domain":
+            domain = const.string(kw.value) or _unparse(kw.value) or None
+        elif kw.arg == "choices":
+            choices = const.choices(kw.value)
+        elif kw.arg == "verbose_name":
+            string = _text(kw.value, const)
+        elif kw.arg == "company_dependent":
+            company_dependent = bool(const.truthy(kw.value))
+    return {"compute": compute, "inverse": inverse, "search_method": search_method,
+            "domain": domain, "choices": choices, "string": string,
+            "company_dependent": company_dependent}
+
+
+def selections_of(decl: ClassDecl) -> dict[str, list[str]]:
+    return {fd.name: list(fd.choices) for fd in decl.fields if fd.choices}
+
+
+def computes_of(decl: ClassDecl) -> dict[str, str]:
+    return {fd.name: fd.compute for fd in decl.fields if fd.compute}
+
+
+def kinds_of(decl: ClassDecl) -> dict[str, str]:
+    return {fd.name: fd.ctor for fd in decl.fields if fd.ctor}
 
 
 def field_factories(tree: ast.Module) -> set[str]:
@@ -208,7 +372,8 @@ def extract(source: bytes, rel_path: str, module: str | None) -> tuple[list[Clas
                          bases=short, module=module,
                          direct_model=any(b in MODEL_BASES or b.endswith(".Model") for b in bases),
                          django_user=any(b in DJANGO_USER_BASES for b in short))
-        meta_name, declared = _read_meta(node, const, decl)
+        scope = const.scoped(node)
+        meta_name, declared = _read_meta(node, scope, decl)
         if meta_name:
             decl.model = normalize(meta_name)
         elif not declared and len(decl.parents) == 1:
@@ -224,7 +389,7 @@ def extract(source: bytes, rel_path: str, module: str | None) -> tuple[list[Clas
             if not isinstance(st, ast.Assign) or not isinstance(st.value, ast.Call):
                 continue
             if _is_field_call(st.value):
-                for fd in _read_field(st, const, rel_path):
+                for fd in _read_field(st, scope, rel_path):
                     decl.fields.append(fd)
                     if fd.delegate and fd.comodel:
                         decl.delegates.append(fd.comodel)

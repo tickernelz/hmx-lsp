@@ -32,15 +32,32 @@ BUILTIN_WIDGETS = {
 RE_VUE_COMPONENT = re.compile(r"VueComponent\.push\(\s*\{\s*name:\s*['\"]([^'\"]+)['\"]")
 RE_VUE_TEMPLATE = re.compile(r"<template\s+name=['\"]([^'\"]+)['\"]")
 RE_FIELD_REG = re.compile(
-    r"FieldRegistry\.register\(\s*['\"]([^'\"]+)['\"]\s*,\s*['\"]([^'\"]+)['\"]"
+    r"FieldRegistry\.register\(\s*['\"]([^'\"]+)['\"]\s*,\s*"
+    r"(?:['\"]([^'\"]+)['\"]|([A-Za-z_$][A-Za-z0-9_$]*))"
 )
 RE_LIST_FIELD_REG = re.compile(
-    r"ListFieldRegistry\.register\(\s*['\"]([^'\"]+)['\"]\s*,\s*['\"]([^'\"]+)['\"]"
+    r"ListFieldRegistry\.register\(\s*['\"]([^'\"]+)['\"]\s*,\s*"
+    r"(?:['\"]([^'\"]+)['\"]|([A-Za-z_$][A-Za-z0-9_$]*))"
 )
 RE_WIDGET_MAP = re.compile(
     r"FieldUtilsV2\.widgetMap\['([^']+)'\]\s*=\s*'([^']+)'|"
     r'FieldUtilsV2\.widgetMap\["([^"]+)"\]\s*=\s*"([^"]+)"'
 )
+RE_VUE_COMPONENT_IDENT = re.compile(
+    r"VueComponent\.push\(\s*\{\s*name:\s*([A-Za-z_$][\w$]*)\s*[,}]"
+)
+RE_JS_CONST_STR = re.compile(
+    r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*['\"]([^'\"\n]+)['\"]"
+)
+RE_VUE_TEMPLATE_KEY = re.compile(r"VueTemplate\[\s*['\"]([^'\"]+)['\"]\s*\]")
+RE_VUE_TEMPLATE_IDENT = re.compile(r"VueTemplate\[\s*([A-Za-z_$][\w$]*)\s*\]")
+RE_DEFINE_STORE = re.compile(r"defineStore\(\s*['\"]([^'\"]+)['\"]")
+RE_REGISTER_ACTION = re.compile(r"registerAction\(\s*['\"]([^'\"]+)['\"]")
+RE_REGISTER_ACTION_IDENT = re.compile(r"registerAction\(\s*([A-Za-z_$][\w$]*)\s*[,)]")
+RE_APP_COMPONENT = re.compile(r"app\.component\(\s*['\"]([^'\"]+)['\"]")
+RE_COMPONENT_EXT = re.compile(r"useComponentExtension\(\s*['\"]([^'\"]+)['\"]")
+RE_COMPONENT_EXT_IDENT = re.compile(r"useComponentExtension\(\s*([A-Za-z_$][\w$]*)\s*[,)]")
+RE_COMPONENT_NAME_SHAPE = re.compile(r"^[A-Za-z][\w]*-[\w-]+$")
 
 
 @dataclass
@@ -59,10 +76,20 @@ class ComponentEntry:
 
 
 @dataclass
+class StoreEntry:
+    name: str
+    loc: Loc
+
+
+@dataclass
 class WebxIndex:
     widgets: dict[str, WidgetEntry] = field(default_factory=dict)
     components: dict[str, ComponentEntry] = field(default_factory=dict)
     by_file: dict[str, list[str]] = field(default_factory=dict)
+    templates: dict[str, Loc] = field(default_factory=dict)
+    stores: dict[str, StoreEntry] = field(default_factory=dict)
+    actions: dict[str, Loc] = field(default_factory=dict)
+    extensions: dict[str, list[Loc]] = field(default_factory=dict)
 
     def resolve_widget(self, name: str) -> tuple[WidgetEntry | None, ComponentEntry | None]:
         w = self.widgets.get(name)
@@ -79,6 +106,17 @@ class WebxIndex:
             return True
         return False
 
+    def known_component(self, name: str) -> bool:
+        if not name:
+            return False
+        if name in self.components or name in self.templates:
+            return True
+        prefixed = f"hx-{name}"
+        return prefixed in self.components or prefixed in self.templates
+
+    def known_store(self, name: str) -> bool:
+        return bool(name) and name in self.stores
+
 
 def extract_js_file(path: str, rel_path: str) -> tuple[list[WidgetEntry], list[tuple[str, Loc]]]:
     widgets: list[WidgetEntry] = []
@@ -89,13 +127,17 @@ def extract_js_file(path: str, rel_path: str) -> tuple[list[WidgetEntry], list[t
     except OSError:
         return widgets, comps
 
+    consts = _string_consts(content)
+
     for m in RE_FIELD_REG.finditer(content):
         line = content[:m.start()].count("\n") + 1
-        widgets.append(WidgetEntry(m.group(1), m.group(2), "form", Loc(rel_path, line, 0)))
+        component = m.group(2) or consts.get(m.group(3) or "", "")
+        widgets.append(WidgetEntry(m.group(1), component, "form", Loc(rel_path, line, 0)))
 
     for m in RE_LIST_FIELD_REG.finditer(content):
         line = content[:m.start()].count("\n") + 1
-        widgets.append(WidgetEntry(m.group(1), m.group(2), "list", Loc(rel_path, line, 0)))
+        component = m.group(2) or consts.get(m.group(3) or "", "")
+        widgets.append(WidgetEntry(m.group(1), component, "list", Loc(rel_path, line, 0)))
 
     for m in RE_WIDGET_MAP.finditer(content):
         w_name = m.group(1) or m.group(3)
@@ -107,7 +149,66 @@ def extract_js_file(path: str, rel_path: str) -> tuple[list[WidgetEntry], list[t
         line = content[:m.start()].count("\n") + 1
         comps.append((m.group(1), Loc(rel_path, line, 0)))
 
+    consts: dict[str, str] | None = None
+    for m in RE_VUE_COMPONENT_IDENT.finditer(content):
+        if consts is None:
+            consts = _string_consts(content)
+        value = consts.get(m.group(1))
+        if value is None or not RE_COMPONENT_NAME_SHAPE.match(value):
+            continue
+        line = content[:m.start()].count("\n") + 1
+        comps.append((value, Loc(rel_path, line, 0)))
+
     return widgets, comps
+
+
+def _string_consts(content: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for m in RE_JS_CONST_STR.finditer(content):
+        out.setdefault(m.group(1), m.group(2))
+    return out
+
+
+def _literal_and_ident(content: str, rel_path: str, literal: re.Pattern[str],
+                       ident: re.Pattern[str] | None,
+                       consts: dict[str, str]) -> list[tuple[str, Loc]]:
+    found: list[tuple[str, Loc]] = []
+    for m in literal.finditer(content):
+        line = content[:m.start()].count("\n") + 1
+        found.append((m.group(1), Loc(rel_path, line, 0)))
+    if ident is None:
+        return found
+    for m in ident.finditer(content):
+        value = consts.get(m.group(1))
+        if value is None:
+            continue
+        line = content[:m.start()].count("\n") + 1
+        found.append((value, Loc(rel_path, line, 0)))
+    return found
+
+
+def extract_js_extras(path: str, rel_path: str) -> dict[str, list[tuple[str, Loc]]]:
+    empty: dict[str, list[tuple[str, Loc]]] = {
+        "templates": [], "stores": [], "actions": [], "extensions": [],
+    }
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            content = fh.read()
+    except OSError:
+        return empty
+
+    consts = _string_consts(content)
+    templates = _literal_and_ident(content, rel_path, RE_VUE_TEMPLATE_KEY, RE_VUE_TEMPLATE_IDENT, consts)
+    stores = _literal_and_ident(content, rel_path, RE_DEFINE_STORE, None, consts)
+    actions = _literal_and_ident(content, rel_path, RE_REGISTER_ACTION, RE_REGISTER_ACTION_IDENT, consts)
+    actions += _literal_and_ident(content, rel_path, RE_APP_COMPONENT, None, consts)
+    extensions = _literal_and_ident(content, rel_path, RE_COMPONENT_EXT, RE_COMPONENT_EXT_IDENT, consts)
+    return {
+        "templates": templates,
+        "stores": stores,
+        "actions": actions,
+        "extensions": extensions,
+    }
 
 
 def extract_vue_file(path: str, rel_path: str) -> list[tuple[str, Loc]]:
@@ -149,6 +250,7 @@ def scan_webx(root: str) -> WebxIndex:
                     file_keys.append(f"c:{c_name}")
                 if file_keys:
                     idx.by_file[rel] = file_keys
+                _absorb_extras(idx, extract_js_extras(path, rel))
             elif f.endswith(".vue"):
                 t_list = extract_vue_file(path, rel)
                 vue_keys: list[str] = []
@@ -158,5 +260,17 @@ def scan_webx(root: str) -> WebxIndex:
                     vue_keys.append(f"c:{t_name}")
                 if vue_keys:
                     idx.by_file[rel] = vue_keys
+                _absorb_extras(idx, extract_js_extras(path, rel))
 
     return idx
+
+
+def _absorb_extras(idx: WebxIndex, extras: dict[str, list[tuple[str, Loc]]]) -> None:
+    for name, loc in extras["templates"]:
+        idx.templates.setdefault(name, loc)
+    for name, loc in extras["stores"]:
+        idx.stores.setdefault(name, StoreEntry(name=name, loc=loc))
+    for name, loc in extras["actions"]:
+        idx.actions.setdefault(name, loc)
+    for name, loc in extras["extensions"]:
+        idx.extensions.setdefault(name, []).append(loc)
