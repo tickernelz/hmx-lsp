@@ -119,7 +119,7 @@ def test_definition_xml_field():
     pos = types.Position(line=4, character=26)
     locs = resolve_definition(server, uri, pos)
     assert len(locs) == 1
-    assert locs[0].uri == "file:///tmp/mock_hmx/models/hr.py"
+    assert locs[0].uri.endswith("models/hr.py")
     assert locs[0].range.start.line == 19
 
 
@@ -129,7 +129,7 @@ def test_definition_xml_widget():
     pos = types.Position(line=4, character=50)
     locs = resolve_definition(server, uri, pos)
     assert len(locs) == 1
-    assert locs[0].uri == "file:///tmp/mock_hmx/static/vue/stat.vue"
+    assert locs[0].uri.endswith("static/vue/stat.vue")
 
 
 def test_definition_py_decorator_depends_hop():
@@ -138,13 +138,14 @@ def test_definition_py_decorator_depends_hop():
     pos = types.Position(line=7, character=22)
     locs = resolve_definition(server, uri, pos)
     assert len(locs) == 1
-    assert locs[0].uri == "file:///tmp/mock_hmx/models/hr.py"
+    assert locs[0].uri.endswith("models/hr.py")
     assert locs[0].range.start.line == 19
 
     pos_hop1 = types.Position(line=7, character=33)
     locs_hop1 = resolve_definition(server, uri, pos_hop1)
     assert len(locs_hop1) == 1
-    assert locs_hop1[0].uri == "file:///tmp/mock_hmx/models/dept.py"
+    assert locs[0].uri.endswith("models/hr.py")
+    assert locs_hop1[0].uri.endswith("models/dept.py")
     assert locs_hop1[0].range.start.line == 11
 
 
@@ -326,7 +327,7 @@ def test_inheritance_fields_and_methods():
     pos = types.Position(line=1, character=84)
     locs = resolve_definition(server, js_uri, pos)
     assert len(locs) == 1
-    assert locs[0].uri == "file:///tmp/mock_hmx/models/parent.py"
+    assert locs[0].uri.endswith("models/parent.py")
     assert locs[0].range.start.line == 9
 
     diags = compute_diagnostics(server, js_uri)

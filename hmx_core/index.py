@@ -73,9 +73,9 @@ class Index:
                 entry = self.entry(d.model)
                 entry.sites.append(d.loc)
                 new_models.append(d.model)
+                affected_models.add(d.model)
                 for m_name, m_loc in d.methods.items():
                     entry.methods[m_name] = m_loc
-                affected_models.add(d.model)
                 for fd in d.fields:
                     entry.declared[fd.name] = fd.loc
                     if fd.comodel:
@@ -101,7 +101,10 @@ class Index:
 
 def python_files(root: str) -> list[str]:
     out = []
-    for parent, dirs, names in os.walk(os.path.join(root, "hmx")):
+    base = os.path.join(root, "hmx")
+    if not os.path.isdir(base):
+        return out
+    for parent, dirs, names in os.walk(base):
         dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
         out += [os.path.join(parent, n) for n in names if n.endswith(".py")]
     return out
@@ -109,7 +112,10 @@ def python_files(root: str) -> list[str]:
 
 def xml_files(root: str) -> list[str]:
     out = []
-    for parent, dirs, names in os.walk(os.path.join(root, "hmx", "module")):
+    base = os.path.join(root, "hmx", "module")
+    if not os.path.isdir(base):
+        return out
+    for parent, dirs, names in os.walk(base):
         dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
         out += [os.path.join(parent, n) for n in names if n.endswith(".xml")]
     return out
@@ -188,6 +194,8 @@ def assemble(decls: list[ClassDecl], modules: dict[str, Module],
         entry.sites.append(decl.loc)
         entry.edges |= set(decl.parents) | set(decl.delegates)
         index.file_models.setdefault(decl.loc.path, []).append(decl.model)
+        for m_name, m_loc in decl.methods.items():
+            entry.methods.setdefault(m_name, m_loc)
         active = modules[decl.module].active_rule if decl.module in modules else False
         if decl.django_user:
             for name in DJANGO_USER_FIELDS:
@@ -198,8 +206,6 @@ def assemble(decls: list[ClassDecl], modules: dict[str, Module],
             entry.injected.setdefault(name, loc)
             if comodel:
                 entry.comodel.setdefault(name, comodel)
-        for m_name, m_loc in decl.methods.items():
-            entry.methods.setdefault(m_name, m_loc)
         for fd in decl.fields:
             entry.declared.setdefault(fd.name, fd.loc)
             if fd.comodel:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from urllib.parse import unquote, urlparse
 from lsprotocol import types
 from hmx_core.locations import Loc
@@ -9,7 +10,10 @@ from hmx_core.locations import Loc
 def uri_to_path(uri: str) -> str:
     parsed = urlparse(uri)
     if parsed.scheme == "file":
-        return os.path.abspath(unquote(parsed.path))
+        path = unquote(parsed.path)
+        if os.name == "nt" and path.startswith("/") and len(path) > 2 and path[2] == ":":
+            path = path[1:]
+        return os.path.abspath(path)
     return uri
 
 
@@ -17,7 +21,7 @@ def path_to_uri(path: str, root: str = "") -> str:
     if not os.path.isabs(path) and root:
         path = os.path.join(root, path)
     abs_path = os.path.abspath(path)
-    return f"file://{abs_path}"
+    return Path(abs_path).as_uri()
 
 
 def loc_to_range(loc: Loc) -> types.Range:
