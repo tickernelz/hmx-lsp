@@ -88,31 +88,68 @@ def cmd_mcp(args) -> int:
     return 0
 
 
+LAYERS = ("xml", "python", "manifest", "csv", "js")
+
+
+def _layer_paths(root: str, layers: list[str]) -> list[str]:
+    from hmx_core.index import indexed_files, xml_files
+
+    wanted = set(layers or LAYERS)
+    out: list[str] = []
+    if "xml" in wanted:
+        out += xml_files(root)
+    if wanted & {"python", "manifest", "csv", "js"}:
+        for path in indexed_files(root):
+            base = os.path.basename(path)
+            if base == "__hmx__.py":
+                if "manifest" in wanted:
+                    out.append(path)
+            elif path.endswith(".py"):
+                if "python" in wanted:
+                    out.append(path)
+            elif path.endswith(".csv"):
+                if "csv" in wanted and "security" in path:
+                    out.append(path)
+            elif path.endswith(".js"):
+                if "js" in wanted:
+                    out.append(path)
+    return out
+
+
 def cmd_check(args) -> int:
     from hmx_ls.features.diagnostics import compute_diagnostics
-    from hmx_core.index import xml_files
     from hmx_ls.cursor.common import path_to_uri
 
     root = _resolve_root(args.root)
     index, resolver = _load_index(root)
     bridge = _Bridge(root, index, resolver)
 
-    paths = xml_files(root)
+    codes = set(args.code or ())
+    paths = _layer_paths(root, args.layer)
     errors = 0
     warnings = 0
+    selected = 0
     for path in paths:
         for diag in compute_diagnostics(bridge, path_to_uri(path)):
+            if codes and diag.code not in codes:
+                continue
             severity = str(diag.severity).lower()
             rel = os.path.relpath(path, root)
             line = diag.range.start.line + 1
-            if "error" in severity:
+            kind = "error" if "error" in severity else "warning"
+            if kind == "error":
                 errors += 1
-                print(f"{rel}:{line}: error [{diag.code}] {diag.message}")
-            elif not args.errors_only:
+            else:
                 warnings += 1
-                print(f"{rel}:{line}: warning [{diag.code}] {diag.message}")
+                if args.errors_only and not codes:
+                    continue
+            selected += 1
+            print(f"{rel}:{line}: {kind} [{diag.code}] {diag.message}")
 
-    print(f"\nchecked {len(paths)} XML files | errors {errors} | warnings {warnings}")
+    scope = ",".join(args.layer or LAYERS)
+    print(f"\nchecked {len(paths)} files [{scope}] | errors {errors} | warnings {warnings}")
+    if codes:
+        return 1 if selected > 0 else 0
     return 1 if errors > 0 else 0
 
 
@@ -280,6 +317,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_check = sub.add_parser("check", help="run cross-layer validation over the workspace")
     p_check.add_argument("--root", help="HMX repository root")
     p_check.add_argument("--errors-only", action="store_true", help="suppress warnings")
+    p_check.add_argument("--layer", action="append", choices=LAYERS,
+                         help="restrict the scan to a layer (repeatable)")
+    p_check.add_argument("--code", action="append",
+                         help="only report this diagnostic code, and fail if any is found")
 
     p_inspect = sub.add_parser("inspect", help="show composed fields, methods, and inheritance")
     p_inspect.add_argument("model")
