@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import multiprocessing
 import os
 import platform
 import shutil
@@ -350,6 +351,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    multiprocessing.freeze_support()
     args = build_parser().parse_args()
     dispatch = {
         "serve": cmd_serve,

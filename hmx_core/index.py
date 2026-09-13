@@ -305,14 +305,21 @@ def build(root: str, workers: int | None = None) -> Index:
     workers = workers or os.cpu_count() or 4
     decls: list[ClassDecl] = []
     factories: set[str] = set()
+    pooled = False
     if workers > 1 and len(py_paths) > workers:
         chunks = [py_paths[i::workers] for i in range(workers)]
-        with ProcessPoolExecutor(max_workers=workers, mp_context=_context(),
-                                 initializer=_init, initargs=(root,)) as pool:
-            for part, found in pool.map(scan, chunks):
-                decls += part
-                factories |= found
-    else:
+        try:
+            with ProcessPoolExecutor(max_workers=workers, mp_context=_context(),
+                                     initializer=_init, initargs=(root,)) as pool:
+                for part, found in pool.map(scan, chunks):
+                    decls += part
+                    factories |= found
+            pooled = True
+        except Exception:
+            decls = []
+            factories = set()
+    if not pooled:
+        _init(root)
         decls, factories = scan(py_paths)
 
     index = assemble(decls, modules, factories)
