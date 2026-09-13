@@ -38,6 +38,7 @@ class HmxLanguageServer(LanguageServer):
         self.index: Index = Index()
         self.resolver: Resolver = Resolver(self.index)
         self._index_ready: threading.Event = threading.Event()
+        self._index_settled: threading.Event = threading.Event()
         self._debounce_tasks: dict[str, asyncio.Task] = {}
         self._bg_thread: threading.Thread | None = None
         self._styles: StyleIndex | None = None
@@ -81,6 +82,7 @@ def _bg_index_worker(ls: HmxLanguageServer, root: str) -> None:
         save(root, paths, fresh)
         indexed = True
     finally:
+        ls._index_settled.set()
         if indexed:
             ls._index_ready.set()
             _publish_open_documents()
@@ -188,18 +190,27 @@ def on_did_close(params: types.DidCloseTextDocumentParams) -> None:
     _send_diagnostics(uri, [])
 
 
+async def _await_index(timeout: float = 60.0) -> None:
+    if server._index_settled.is_set():
+        return
+    await asyncio.to_thread(server._index_settled.wait, timeout)
+
+
 @server.feature(types.TEXT_DOCUMENT_DEFINITION)
-def on_definition(params: types.DefinitionParams) -> list[types.Location]:
+async def on_definition(params: types.DefinitionParams) -> list[types.Location]:
+    await _await_index()
     return resolve_definition(server, params.text_document.uri, params.position)
 
 
 @server.feature(types.TEXT_DOCUMENT_HOVER)
-def on_hover(params: types.HoverParams) -> types.Hover | None:
+async def on_hover(params: types.HoverParams) -> types.Hover | None:
+    await _await_index()
     return resolve_hover(server, params.text_document.uri, params.position)
 
 
 @server.feature(types.TEXT_DOCUMENT_COMPLETION)
-def on_completion(params: types.CompletionParams) -> types.CompletionList:
+async def on_completion(params: types.CompletionParams) -> types.CompletionList:
+    await _await_index()
     return resolve_completion(server, params.text_document.uri, params.position)
 
 
@@ -209,32 +220,38 @@ def on_document_symbol(params: types.DocumentSymbolParams) -> list[types.Documen
 
 
 @server.feature(types.WORKSPACE_SYMBOL)
-def on_workspace_symbol(params: types.WorkspaceSymbolParams) -> list[types.WorkspaceSymbol]:
+async def on_workspace_symbol(params: types.WorkspaceSymbolParams) -> list[types.WorkspaceSymbol]:
+    await _await_index()
     return resolve_workspace_symbols(server, params.query)
 
 
 @server.feature(types.TEXT_DOCUMENT_REFERENCES)
-def on_references(params: types.ReferenceParams) -> list[types.Location]:
+async def on_references(params: types.ReferenceParams) -> list[types.Location]:
+    await _await_index()
     return resolve_references(server, params.text_document.uri, params.position)
 
 
 @server.feature(types.TEXT_DOCUMENT_CODE_ACTION)
-def on_code_action(params: types.CodeActionParams) -> list[types.CodeAction]:
+async def on_code_action(params: types.CodeActionParams) -> list[types.CodeAction]:
+    await _await_index()
     return resolve_code_actions(server, params.text_document.uri, params.range, params.context)
 
 
 @server.feature(types.TEXT_DOCUMENT_PREPARE_RENAME)
-def on_prepare_rename(params: types.PrepareRenameParams) -> types.PrepareRenamePlaceholder | None:
+async def on_prepare_rename(params: types.PrepareRenameParams) -> types.PrepareRenamePlaceholder | None:
+    await _await_index()
     return prepare_rename(server, params.text_document.uri, params.position)
 
 
 @server.feature(types.TEXT_DOCUMENT_RENAME)
-def on_rename(params: types.RenameParams) -> types.WorkspaceEdit | None:
+async def on_rename(params: types.RenameParams) -> types.WorkspaceEdit | None:
+    await _await_index()
     return resolve_rename(server, params.text_document.uri, params.position, params.new_name)
 
 
 @server.feature(types.TEXT_DOCUMENT_DOCUMENT_LINK)
-def on_document_link(params: types.DocumentLinkParams) -> list[types.DocumentLink]:
+async def on_document_link(params: types.DocumentLinkParams) -> list[types.DocumentLink]:
+    await _await_index()
     return resolve_document_links(server, params.text_document.uri)
 
 

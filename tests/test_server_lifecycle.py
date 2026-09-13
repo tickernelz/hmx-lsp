@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 from lsprotocol import types
@@ -48,16 +49,16 @@ def test_server_initialization_and_queries(tmp_path: Path):
     uri = xml_file.as_uri()
 
     pos = types.Position(line=4, character=26)
-    comp = on_completion(types.CompletionParams(
+    comp = asyncio.run(on_completion(types.CompletionParams(
         text_document=types.TextDocumentIdentifier(uri=uri),
         position=pos,
-    ))
+    )))
     labels = [i.label for i in comp.items]
     assert "name" in labels
 
-    hover = on_hover(types.HoverParams(
+    hover = asyncio.run(on_hover(types.HoverParams(
         text_document=types.TextDocumentIdentifier(uri=uri),
         position=pos,
-    ))
+    )))
     assert hover is not None
     assert "hremployee" in hover.contents.value

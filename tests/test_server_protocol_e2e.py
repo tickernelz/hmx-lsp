@@ -215,3 +215,47 @@ def test_a_failed_index_publishes_nothing_rather_than_false_findings(broken_clie
     _open(broken_client, os.path.join(MODULE, "views", "order.xml"), "xml")
     with pytest.raises(AssertionError):
         broken_client.await_notification("textDocument/publishDiagnostics")
+
+
+def test_hover_requested_before_the_index_is_ready_still_answers(slow_client):
+    uri = _open(slow_client, os.path.join(MODULE, "views", "order.xml"), "xml")
+    with open(os.path.join(slow_client.root, MODULE, "views", "order.xml"),
+              encoding="utf-8") as handle:
+        lines = handle.read().splitlines()
+    line = next(i for i, text in enumerate(lines) if 'name="partner"' in text)
+    reply = slow_client.request("textDocument/hover", {
+        "textDocument": {"uri": uri},
+        "position": {"line": line, "character": lines[line].index("partner") + 2},
+    })
+    assert "error" not in reply
+    assert reply.get("result") is not None
+
+
+def test_a_workspace_without_hmx_answers_instead_of_blocking(tmp_path):
+    plain = tmp_path / "plain"
+    (plain / "src").mkdir(parents=True)
+    target = plain / "src" / "thing.py"
+    target.write_text("value = 1\n")
+
+    session = Client(str(plain))
+    try:
+        reply = session.request("initialize", {
+            "processId": os.getpid(),
+            "rootUri": plain.as_uri(),
+            "capabilities": {},
+            "workspaceFolders": [{"uri": plain.as_uri(), "name": "plain"}],
+        })
+        assert reply["result"]["capabilities"]
+        session.notify("initialized", {})
+        uri = "file://" + str(target)
+        session.notify("textDocument/didOpen", {
+            "textDocument": {"uri": uri, "languageId": "python",
+                             "version": 1, "text": "value = 1\n"},
+        })
+        hover = session.request("textDocument/hover", {
+            "textDocument": {"uri": uri},
+            "position": {"line": 0, "character": 1},
+        })
+        assert "error" not in hover
+    finally:
+        session.close()
