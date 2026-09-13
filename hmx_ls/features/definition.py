@@ -177,7 +177,7 @@ def _from_xml(server, content: str, line: int, col: int, module: str | None) -> 
 
 
 def _from_python(server, content: str, line: int, col: int, module: str | None) -> list[types.Location]:
-    ctx = resolve_py_cursor(content, line, col)
+    ctx = resolve_py_cursor(content, line, col, server.resolver)
     if ctx is None:
         return []
 

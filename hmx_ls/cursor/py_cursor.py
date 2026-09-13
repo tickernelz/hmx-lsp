@@ -1,6 +1,13 @@
 from __future__ import annotations
 
 import ast
+
+from hmx_core.locals import (
+    enclosing_function,
+    is_framework_attr,
+    local_models,
+    model_of_expr,
+)
 from dataclasses import dataclass
 
 
@@ -52,7 +59,8 @@ def _find_enclosing_model(stack: list[ast.AST]) -> str | None:
     return None
 
 
-def resolve_py_cursor(content: str, line: int, col: int) -> PyCursorContext | None:
+def resolve_py_cursor(content: str, line: int, col: int,
+                      resolver=None) -> PyCursorContext | None:
     try:
         tree = ast.parse(content)
     except SyntaxError:
@@ -66,6 +74,23 @@ def resolve_py_cursor(content: str, line: int, col: int) -> PyCursorContext | No
     stack = finder.best
     node = stack[-1]
     active_model = _find_enclosing_model(stack)
+
+    if isinstance(node, ast.Attribute):
+        base = node.value
+        dot_end = getattr(base, "end_col_offset", None)
+        on_attr = dot_end is not None and col >= dot_end + 1
+        is_api = isinstance(base, ast.Name) and base.id == "api"
+        if on_attr and not is_api:
+            func = enclosing_function(stack)
+            owner = None
+            if func is not None:
+                bindings = local_models(func, active_model, resolver)
+                owner = model_of_expr(base, bindings, active_model, resolver)
+            if owner and not is_framework_attr(node.attr):
+                start = dot_end + 1
+                rng = ((node.lineno, start), (node.end_lineno, start + len(node.attr)))
+                return PyCursorContext(kind="field", value=node.attr,
+                                       active_model=owner, range=rng)
 
     for p_node in reversed(stack):
         if isinstance(p_node, ast.Attribute):

@@ -234,7 +234,7 @@ def _from_python(server, content: str, line: int, col: int, current: str) -> typ
             for label, snippet, detail in HMX_DECORATORS
         ])
 
-    ctx = resolve_py_cursor(content, line, col)
+    ctx = resolve_py_cursor(content, line, col, server.resolver)
     if ctx is None:
         return _empty()
 

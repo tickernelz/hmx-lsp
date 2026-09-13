@@ -28,7 +28,7 @@ def prepare_rename(server, uri: str, position: types.Position) -> types.PrepareR
         if ctx and ctx.kind == "field" and ctx.value:
             return types.PrepareRenamePlaceholder(range=range_to_lsp(ctx.range), placeholder=ctx.value)
     elif path.endswith(".py"):
-        ctx = resolve_py_cursor(content, line, col)
+        ctx = resolve_py_cursor(content, line, col, server.resolver)
         if ctx and ctx.kind in ("field", "dotted_field") and ctx.value:
             f_name = ctx.value.split(".")[ctx.hop_index]
             return types.PrepareRenamePlaceholder(range=range_to_lsp(ctx.range), placeholder=f_name)
@@ -59,7 +59,7 @@ def resolve_rename(server, uri: str, position: types.Position, new_name: str) ->
             target_model = ctx.active_model
             old_field = ctx.value
     elif path.endswith(".py"):
-        ctx = resolve_py_cursor(content, line, col)
+        ctx = resolve_py_cursor(content, line, col, server.resolver)
         if ctx and ctx.kind in ("field", "dotted_field") and ctx.active_model:
             target_model = ctx.active_model
             old_field = ctx.value.split(".")[ctx.hop_index]

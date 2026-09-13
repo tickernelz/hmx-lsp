@@ -140,7 +140,7 @@ def resolve_references(server, uri: str, position: types.Position) -> list[types
             elif ctx.kind in ("widget", "component"):
                 component = ctx.value
     elif path.endswith(".py"):
-        ctx = resolve_py_cursor(content, line, col)
+        ctx = resolve_py_cursor(content, line, col, server.resolver)
         if ctx:
             if ctx.kind == "model":
                 model = ctx.value
