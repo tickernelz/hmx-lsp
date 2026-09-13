@@ -51,6 +51,17 @@ class HmxLanguageServer(LanguageServer):
 server = HmxLanguageServer("hmx-ls", __version__)
 
 
+def _publish_open_documents() -> None:
+    workspace = getattr(server, "workspace", None)
+    if workspace is None:
+        return
+    for uri in list(getattr(workspace, "text_documents", {})):
+        try:
+            _send_diagnostics(uri, compute_diagnostics(server, uri))
+        except Exception:
+            continue
+
+
 def _bg_index_worker(ls: HmxLanguageServer, root: str) -> None:
     try:
         if not root or not os.path.isdir(os.path.join(root, "hmx")):
@@ -67,6 +78,7 @@ def _bg_index_worker(ls: HmxLanguageServer, root: str) -> None:
         save(root, paths, fresh)
     finally:
         ls._index_ready.set()
+        _publish_open_documents()
 
 
 @server.feature(types.INITIALIZE)
@@ -114,7 +126,15 @@ def on_initialize(params: types.InitializeParams) -> types.InitializeResult:
 
 
 def _publish(uri: str) -> None:
-    server.publish_diagnostics(uri, compute_diagnostics(server, uri))
+    if not server._index_ready.is_set():
+        return
+    _send_diagnostics(uri, compute_diagnostics(server, uri))
+
+
+def _send_diagnostics(uri: str, diagnostics: list[types.Diagnostic]) -> None:
+    server.text_document_publish_diagnostics(
+        types.PublishDiagnosticsParams(uri=uri, diagnostics=diagnostics)
+    )
 
 
 async def _debounced(uri: str) -> None:
@@ -160,7 +180,7 @@ def on_did_close(params: types.DidCloseTextDocumentParams) -> None:
     pending = server._debounce_tasks.pop(uri, None)
     if pending and not pending.done():
         pending.cancel()
-    server.publish_diagnostics(uri, [])
+    _send_diagnostics(uri, [])
 
 
 @server.feature(types.TEXT_DOCUMENT_DEFINITION)
