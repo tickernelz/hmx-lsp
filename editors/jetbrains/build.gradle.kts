@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.hashmicro.hmx"
-version = providers.gradleProperty("pluginVersion").getOrElse("0.2.1")
+version = providers.gradleProperty("pluginVersion").getOrElse("0.2.2")
 
 repositories {
     mavenCentral()
