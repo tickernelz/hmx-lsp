@@ -206,7 +206,10 @@ def _init(root: str) -> None:
 
 def _context():
     methods = multiprocessing.get_all_start_methods()
-    return multiprocessing.get_context("fork" if "fork" in methods else "spawn")
+    for method in ("forkserver", "spawn"):
+        if method in methods:
+            return multiprocessing.get_context(method)
+    return multiprocessing.get_context()
 
 
 def keep_model_classes(decls: list[ClassDecl]) -> list[ClassDecl]:
