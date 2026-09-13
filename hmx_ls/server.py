@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import threading
+import time
 
 from lsprotocol import types
 from pygls.lsp.server import LanguageServer
@@ -56,14 +57,14 @@ def _publish_open_documents() -> None:
     if workspace is None:
         return
     for uri in list(getattr(workspace, "text_documents", {})):
-        try:
-            _send_diagnostics(uri, compute_diagnostics(server, uri))
-        except Exception:
-            continue
+        _send_diagnostics(uri, compute_diagnostics(server, uri))
 
 
 def _bg_index_worker(ls: HmxLanguageServer, root: str) -> None:
     try:
+        delay = float(os.environ.get("HMX_LSP_INDEX_DELAY", "0") or 0)
+        if delay > 0:
+            time.sleep(delay)
         if not root or not os.path.isdir(os.path.join(root, "hmx")):
             return
         paths = indexed_files(root)

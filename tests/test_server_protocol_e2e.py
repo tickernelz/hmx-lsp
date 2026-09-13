@@ -39,11 +39,12 @@ def _pump(stream, sink: queue.Queue) -> None:
 
 
 class Client:
-    def __init__(self, root: str):
+    def __init__(self, root: str, index_delay: str = "0"):
         self.proc = subprocess.Popen(
             [sys.executable, "-m", "hmx_ls.cli", "serve"],
             cwd=REPO,
-            env={**os.environ, "PYTHONPATH": REPO, "PYTHONUNBUFFERED": "1"},
+            env={**os.environ, "PYTHONPATH": REPO, "PYTHONUNBUFFERED": "1",
+                 "HMX_LSP_INDEX_DELAY": index_delay},
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
         self.root = root
@@ -98,6 +99,28 @@ class Client:
             self.proc.kill()
         except OSError:
             pass
+
+
+def _session(tmp_path, index_delay="0"):
+    root = tmp_path / "corpus"
+    shutil.copytree(FIXTURE, root)
+    session = Client(str(root), index_delay=index_delay)
+    reply = session.request("initialize", {
+        "processId": os.getpid(),
+        "rootUri": root.as_uri(),
+        "capabilities": {"textDocument": {"publishDiagnostics": {}}},
+        "workspaceFolders": [{"uri": root.as_uri(), "name": "corpus"}],
+    })
+    assert reply["result"]["capabilities"]
+    session.notify("initialized", {})
+    return session
+
+
+@pytest.fixture
+def slow_client(tmp_path):
+    session = _session(tmp_path, index_delay="3")
+    yield session
+    session.close()
 
 
 @pytest.fixture
@@ -160,3 +183,22 @@ def test_hover_answers_over_the_wire(client):
         "position": {"line": line, "character": lines[line].index("partner") + 2},
     })
     assert "error" not in reply
+
+
+def test_a_document_opened_before_the_index_is_ready_still_gets_diagnostics(slow_client):
+    uri = _open(slow_client, os.path.join(MODULE, "views", "order.xml"), "xml")
+    params = slow_client.await_notification("textDocument/publishDiagnostics")
+    assert params["uri"] == uri
+    messages = [d["message"] for d in params["diagnostics"]]
+    assert [m for m in messages if "ghostfield" in m]
+
+
+def test_the_late_publish_covers_every_open_document(slow_client):
+    view = _open(slow_client, os.path.join(MODULE, "views", "order.xml"), "xml")
+    manifest = _open(slow_client, os.path.join(MODULE, "__hmx__.py"), "python")
+    seen: dict[str, list] = {}
+    while set(seen) < {view, manifest}:
+        params = slow_client.await_notification("textDocument/publishDiagnostics")
+        seen[params["uri"]] = params["diagnostics"]
+    assert [d for d in seen[view] if "ghostfield" in d["message"]]
+    assert {d["code"] for d in seen[manifest]} == {"hmx-dead-asset"}
