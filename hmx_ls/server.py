@@ -61,6 +61,7 @@ def _publish_open_documents() -> None:
 
 
 def _bg_index_worker(ls: HmxLanguageServer, root: str) -> None:
+    indexed = False
     try:
         delay = float(os.environ.get("HMX_LSP_INDEX_DELAY", "0") or 0)
         if delay > 0:
@@ -72,14 +73,17 @@ def _bg_index_worker(ls: HmxLanguageServer, root: str) -> None:
         if cached is not None:
             ls.index = cached
             ls.resolver = Resolver(cached)
+            indexed = True
             return
         fresh = build(root)
         ls.index = fresh
         ls.resolver = Resolver(fresh)
         save(root, paths, fresh)
+        indexed = True
     finally:
-        ls._index_ready.set()
-        _publish_open_documents()
+        if indexed:
+            ls._index_ready.set()
+            _publish_open_documents()
 
 
 @server.feature(types.INITIALIZE)

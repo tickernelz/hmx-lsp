@@ -202,3 +202,16 @@ def test_the_late_publish_covers_every_open_document(slow_client):
         seen[params["uri"]] = params["diagnostics"]
     assert [d for d in seen[view] if "ghostfield" in d["message"]]
     assert {d["code"] for d in seen[manifest]} == {"hmx-dead-asset"}
+
+
+@pytest.fixture
+def broken_client(tmp_path):
+    session = _session(tmp_path, index_delay="not-a-number")
+    yield session
+    session.close()
+
+
+def test_a_failed_index_publishes_nothing_rather_than_false_findings(broken_client):
+    _open(broken_client, os.path.join(MODULE, "views", "order.xml"), "xml")
+    with pytest.raises(AssertionError):
+        broken_client.await_notification("textDocument/publishDiagnostics")
