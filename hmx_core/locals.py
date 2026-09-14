@@ -5,6 +5,7 @@ import pathlib
 from typing import Protocol
 
 from hmx_core.pysource import Constants, parse_source
+from hmx_core.call_arguments import parameters, infer_parameters, argument_models, source_tree
 
 SELF_NAMES = frozenset({"self"})
 RECORDSET_NAMES = frozenset({"self", "record", "rec", "order", "request"})
@@ -114,7 +115,7 @@ def _returns_in_scope(function: ast.AST) -> list[ast.Return]:
         for child in ast.iter_child_nodes(node):
             if isinstance(child, ast.Return):
                 out.append(child)
-            elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
                 continue
             else:
                 visit(child)
@@ -138,9 +139,11 @@ def model_of_return(node: ast.AST, bindings: dict[str, str], model: str,
     return None if _empty_return(node) else model_of_expr(node, bindings, model, resolver)
 
 
+
 def method_result_model(model: str, method: str, resolver: ModelResolver,
-                       seen: frozenset[tuple[str, str]] = frozenset()) -> str | None:
-    key = (model, method)
+                       seen: frozenset[tuple[str, str, tuple[str | None, ...]]] = frozenset(),
+                       arg_models: tuple[str | None, ...] = ()) -> str | None:
+    key = (model, method, arg_models)
     if key in seen:
         return None
     cache = getattr(resolver, "_method_result_models", None)
@@ -153,7 +156,7 @@ def method_result_model(model: str, method: str, resolver: ModelResolver,
     if inflight is None:
         inflight = set()
         resolver._method_result_inflight = inflight
-    if key in inflight:
+    if key in inflight or len(inflight) >= 32:
         return None
     inflight.add(key)
     entry = getattr(resolver, "index", None)
@@ -166,7 +169,18 @@ def method_result_model(model: str, method: str, resolver: ModelResolver,
             return None
         path = pathlib.Path(root) / loc.path
         try:
-            tree = parse_source(path.read_bytes())
+            stat = path.stat()
+            source_cache = getattr(resolver, "_source_trees", None)
+            if source_cache is None:
+                source_cache = {}
+                resolver._source_trees = source_cache
+            cached = source_cache.get(str(path))
+            stamp = (stat.st_mtime_ns, stat.st_size)
+            if cached is not None and cached[0] == stamp:
+                tree = cached[1]
+            else:
+                tree = parse_source(path.read_bytes())
+                source_cache[str(path)] = (stamp, tree)
         except (OSError, SyntaxError, ValueError):
             cache[key] = None
             return None
@@ -175,6 +189,11 @@ def method_result_model(model: str, method: str, resolver: ModelResolver,
                     or node.name != method or node.lineno != loc.line):
                 continue
             bindings = {"self": model}
+            params = parameters(node)
+            for parameter, parameter_model in zip(params, arg_models):
+                if parameter_model:
+                    bindings[parameter.arg] = parameter_model
+            bindings.update(local_models(node, model, resolver, parameter_models=arg_models))
             found_models: set[str] = set()
             unresolved = False
             saw_return = False
@@ -228,7 +247,11 @@ def model_of_expr(node: ast.AST, bindings: dict[str, str], model: str | None,
                 return model_of_expr(func.value, bindings, model, resolver)
             base = model_of_expr(func.value, bindings, model, resolver)
             if base and resolver is not None:
-                found = method_result_model(base, func.attr, resolver)
+                from hmx_core.call_arguments import argument_models, method_definition
+                definition = method_definition(base, func.attr, resolver)
+                arg_models = (argument_models(node, definition, bindings, model, resolver)
+                              if definition is not None else ())
+                found = method_result_model(base, func.attr, resolver, arg_models=arg_models)
                 if found:
                     return found
             if func.attr == "mapped" and node.args:
@@ -288,10 +311,19 @@ def _bind_targets(target: ast.AST, source: ast.AST, bindings: dict[str, str],
 
 
 def local_models(func: ast.AST, model: str | None,
-                 resolver: ModelResolver | None) -> dict[str, str]:
+                 resolver: ModelResolver | None, *,
+                 parameter_models: tuple[str | None, ...] | None = None) -> dict[str, str]:
     bindings: dict[str, str] = {}
     if model:
         bindings["self"] = model
+    if isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        params = parameters(func)
+        if parameter_models is None and params and resolver is not None and model:
+            index = getattr(resolver, "index", None)
+            parameter_models = infer_parameters(func, model, resolver) if index and index.root else ()
+        for parameter, parameter_model in zip(params, parameter_models or ()):
+            if parameter_model:
+                bindings[parameter.arg] = parameter_model
 
     for _ in range(3):
         before = dict(bindings)

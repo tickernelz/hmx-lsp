@@ -14,13 +14,21 @@ class Resolver:
         self._computes: dict[str, dict[str, str]] = {}
         self._kinds: dict[str, dict[str, str]] = {}
         self._mro: dict[str, list[str]] = {}
-        self._method_result_models: dict[tuple[str, str], str | None] = {}
+        self._method_result_models: dict[tuple[str, str, tuple[str | None, ...]], str | None] = {}
+        self._source_trees: dict[str, tuple[tuple[int, int], object]] = {}
+        self._caller_files: dict[str, list[str]] | None = None
+        self._method_call_args: dict[tuple[str, str], tuple[str | None, ...]] = {}
+        self._parameter_inflight: set[tuple[str, str]] = set()
 
     def known(self, model: str) -> bool:
         return self.index.known(model)
 
     def invalidate(self, models: set[str] | None = None) -> None:
         self._method_result_models.clear()
+        if hasattr(self, "_method_call_args"):
+            self._method_call_args.clear()
+        self._source_trees.clear()
+        self._caller_files = None
         if not models:
             self._fields.clear()
             self._methods.clear()
