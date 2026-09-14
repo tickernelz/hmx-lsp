@@ -6,6 +6,7 @@ import os
 from dataclasses import dataclass, field
 
 from .locations import Loc
+from .pysource import parse_source
 
 MANIFEST = "__hmx__.py"
 SKIP_DIRS = (".git", "node_modules", "__pycache__")
@@ -87,7 +88,7 @@ def _from_tree(tree: ast.Module, rel_path: str,
 
 def _collect(path: str, rel_path: str, module: str) -> tuple[list[str], list[AssetEntry]]:
     try:
-        tree = ast.parse(open(path, "rb").read())
+        tree = parse_source(open(path, "rb").read())
     except (SyntaxError, OSError, ValueError):
         return [], []
     return _from_tree(tree, rel_path, module)
@@ -99,7 +100,7 @@ def extract_assets_from_manifest(path: str, rel_path: str, module: str) -> list[
 
 def assets_from_source(content: str, rel_path: str, module_dir: str) -> list[AssetEntry]:
     try:
-        tree = ast.parse(content)
+        tree = parse_source(content)
     except (SyntaxError, ValueError):
         return []
     entries = _from_tree(tree, rel_path, os.path.basename(module_dir))[1]

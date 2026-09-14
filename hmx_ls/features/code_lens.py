@@ -5,6 +5,7 @@ import os
 from lsprotocol import types
 from lxml import etree
 
+from hmx_core.pysource import parse_source
 from hmx_ls.cursor.common import uri_to_path
 
 VIEW_MODEL = "baseuiview"
@@ -33,7 +34,7 @@ def resolve_code_lens(server, uri: str) -> list[types.CodeLens]:
 
 def _python_lenses(server, content: str) -> list[types.CodeLens]:
     try:
-        tree = ast.parse(content)
+        tree = parse_source(content)
     except (SyntaxError, ValueError):
         return []
     out: list[types.CodeLens] = []

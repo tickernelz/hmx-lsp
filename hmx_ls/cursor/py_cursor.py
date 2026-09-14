@@ -3,7 +3,7 @@ from __future__ import annotations
 import ast
 import re
 
-from hmx_core.pysource import Constants
+from hmx_core.pysource import Constants, parse_source
 from hmx_core.locals import (
     class_model,
     enclosing_function,
@@ -70,7 +70,7 @@ def _incomplete_attribute(content: str, line: int, col: int,
     replacement_start = line_start + match.start("partial")
     synthetic = content[:replacement_start] + "__hmx_cursor" + content[line_start + col:]
     try:
-        tree = ast.parse(synthetic)
+        tree = parse_source(synthetic)
     except SyntaxError:
         return None
     finder = _NodeFinder(line, col)
@@ -98,7 +98,7 @@ def _incomplete_attribute(content: str, line: int, col: int,
 def resolve_py_cursor(content: str, line: int, col: int,
                       resolver=None) -> PyCursorContext | None:
     try:
-        tree = ast.parse(content)
+        tree = parse_source(content)
     except SyntaxError:
         return _incomplete_attribute(content, line, col, resolver)
 

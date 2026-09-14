@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import ast
+import re
+import io
+import tokenize
 from dataclasses import dataclass, field
 
 from .locations import Loc
@@ -357,9 +360,82 @@ def field_factories(tree: ast.Module) -> set[str]:
     return out
 
 
+def _protected_source_lines(source: str) -> set[int]:
+    protected: set[int] = set()
+    try:
+        tokens = tokenize.generate_tokens(io.StringIO(source).readline)
+        for token in tokens:
+            if token.type not in (tokenize.STRING, tokenize.COMMENT):
+                continue
+            protected.update(range(token.start[0], token.end[0] + 1))
+    except (tokenize.TokenError, IndentationError):
+        return protected
+    return protected
+
+
+def _parenthesize_except_groups(source: str) -> tuple[str, dict[int, tuple[int, int]]]:
+    protected = _protected_source_lines(source)
+    lines = source.splitlines(keepends=True)
+    out: list[str] = []
+    shifts: dict[int, tuple[int, int]] = {}
+    for number, line in enumerate(lines, start=1):
+        match = re.match(r"^(\s*except\s+)([^:\n]+)(:.*)$", line)
+        if number in protected or not match:
+            out.append(line)
+            continue
+        body = match.group(2)
+        if "," not in body or body.lstrip().startswith("("):
+            out.append(line)
+            continue
+        prefix = match.group(1)
+        out.append(f"{prefix}({body}){match.group(3)}")
+        body_start = len(prefix.encode("utf-8"))
+        close_start = body_start + 1 + len(body.encode("utf-8"))
+        shifts[number] = (body_start, close_start)
+    return "".join(out), shifts
+
+
+def _restore_columns(tree: ast.Module, shifts: dict[int, tuple[int, int]]) -> None:
+    def restore(line: int, col: int) -> int:
+        if line not in shifts:
+            return col
+        body_start, close_start = shifts[line]
+        if col >= close_start:
+            return max(0, col - 2)
+        if col > body_start:
+            return max(0, col - 1)
+        return col
+
+    for node in ast.walk(tree):
+        for attr in ("col_offset", "end_col_offset"):
+            line = getattr(node, "lineno" if attr == "col_offset" else "end_lineno", None)
+            col = getattr(node, attr, None)
+            if line is not None and col is not None:
+                setattr(node, attr, restore(line, col))
+
+
+def parse_source(source: bytes | str) -> ast.Module:
+    if isinstance(source, bytes):
+        try:
+            return ast.parse(source)
+        except SyntaxError:
+            text = source.decode("utf-8")
+    else:
+        text = source
+    try:
+        return ast.parse(text)
+    except SyntaxError:
+        transformed, shifts = _parenthesize_except_groups(text)
+        if transformed == text:
+            raise
+        tree = ast.parse(transformed)
+        _restore_columns(tree, shifts)
+        return tree
+
+
 def extract(source: bytes, rel_path: str, module: str | None) -> tuple[list[ClassDecl], set[str]]:
     """Model classes in this file, plus any field-factory functions it defines."""
-    tree = ast.parse(source)
+    tree = parse_source(source)
     const = Constants(tree)
     factories = field_factories(tree)
     out: list[ClassDecl] = []

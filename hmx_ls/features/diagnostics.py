@@ -13,7 +13,7 @@ from hmx_core.assets import assets_from_source
 from hmx_core.expressions import refs_for_attribute
 from hmx_core.locals import class_model
 from hmx_core.manifest import owner_of
-from hmx_core.pysource import Constants
+from hmx_core.pysource import Constants, parse_source
 from hmx_core.naming import is_domain_keyword, is_known_model, resolve_model
 from hmx_ls.cursor.common import safe_relpath, uri_to_path
 from hmx_ls.cursor.js_cursor import RE_API_URL, RE_METHOD_KEY, RE_MODEL_KEY
@@ -354,7 +354,7 @@ def _env_ref_diagnostic(server, node: ast.Call, module: str | None,
 
 def _diagnose_python(server, content: str, module: str | None) -> list[types.Diagnostic]:
     try:
-        tree = ast.parse(content)
+        tree = parse_source(content)
     except SyntaxError:
         return []
 
