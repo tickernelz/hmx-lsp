@@ -123,10 +123,16 @@ def resolve_py_cursor(content: str, line: int, col: int,
             if func is not None:
                 bindings = local_models(func, active_model, resolver)
                 owner = model_of_expr(base, bindings, active_model, resolver)
-            if owner and not is_framework_attr(node.attr):
+            if owner:
                 start = dot_end + 1
                 rng = ((node.lineno, start), (node.end_lineno, start + len(node.attr)))
-                return PyCursorContext(kind="field", value=node.attr,
+                methods = resolver.methods(owner) if resolver is not None else {}
+                kind = "method" if node.attr in methods else "field"
+                if kind == "field" and node.attr.startswith("_"):
+                    kind = "field_prefix"
+                if kind == "field" and is_framework_attr(node.attr):
+                    return None
+                return PyCursorContext(kind=kind, value=node.attr,
                                        active_model=owner, range=rng)
 
     for p_node in reversed(stack):

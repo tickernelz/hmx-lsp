@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import ast
 import os
 
 from lsprotocol import types
 
+from hmx_core.locations import Loc
+from hmx_core.locals import class_model, local_models, model_of_expr
+from hmx_core.pysource import Constants, parse_source
 from hmx_ls.cursor.common import loc_to_range, path_to_uri, uri_to_path
 from hmx_ls.cursor.js_cursor import resolve_js_cursor
 from hmx_ls.cursor.py_cursor import resolve_py_cursor
@@ -78,8 +82,37 @@ def _field_references(server, model: str, field: str) -> list[types.Location]:
 
 
 def _method_references(server, model: str, method: str) -> list[types.Location]:
+    out: list[types.Location] = []
     found = _location(server, server.resolver.methods(model).get(method))
-    return [found] if found else []
+    if found:
+        out.append(found)
+    for py_file in server.index.file_models:
+        path = os.path.join(server.root, py_file)
+        try:
+            tree = parse_source(open(path, "rb").read())
+        except (OSError, SyntaxError, ValueError):
+            continue
+        constants = Constants(tree)
+        for cls in ast.walk(tree):
+            if not isinstance(cls, ast.ClassDef) or class_model(cls, constants) != model:
+                continue
+            for item in cls.body:
+                if not isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                bindings = local_models(item, model, server.resolver)
+                for node in ast.walk(item):
+                    if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                        continue
+                    if node.func.attr != method:
+                        continue
+                    owner = model_of_expr(node.func.value, bindings, model, server.resolver)
+                    if owner != model:
+                        continue
+                    loc = Loc(py_file, node.func.end_lineno, node.func.end_col_offset - len(method))
+                    found_call = _location(server, loc)
+                    if found_call:
+                        out.append(found_call)
+    return _dedupe(out)
 
 
 def _component_references(server, name: str) -> list[types.Location]:
@@ -151,6 +184,8 @@ def resolve_references(server, uri: str, position: types.Position) -> list[types
                     model, field = resolved[index][0], resolved[index][1]
             elif ctx.kind == "field":
                 model, field = ctx.active_model, ctx.value
+            elif ctx.kind == "method":
+                model, method = ctx.active_model, ctx.value
     elif path.endswith((".js", ".vue")):
         ctx = resolve_js_cursor(content, line, col)
         if ctx:

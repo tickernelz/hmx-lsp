@@ -241,8 +241,11 @@ def _from_python(server, content: str, line: int, col: int, current: str) -> typ
     if ctx.kind == "model":
         return types.CompletionList(is_incomplete=False, items=_model_items(server))
     if ctx.kind == "field_prefix" and ctx.active_model:
-        return types.CompletionList(is_incomplete=False,
-                                    items=_field_items(server, ctx.active_model, ctx.value))
+        fields = [item for item in _field_items(server, ctx.active_model, ctx.value)
+                  if item.label.startswith(ctx.value)]
+        methods = [item for item in _method_items(server, ctx.active_model)
+                   if item.label.startswith(ctx.value)]
+        return types.CompletionList(is_incomplete=False, items=fields + methods)
     if ctx.kind == "dotted_field" and ctx.active_model:
         model = ctx.active_model
         hops = ctx.value.split(".")[:ctx.hop_index]

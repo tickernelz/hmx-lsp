@@ -257,6 +257,8 @@ def _from_python(server, content: str, line: int, col: int, module: str | None) 
         return _field_card(server, owner, hop, label)
     if ctx.kind == "field" and ctx.active_model:
         return _field_card(server, ctx.active_model, ctx.value)
+    if ctx.kind == "method" and ctx.active_model:
+        return _method_card(server, ctx.active_model, ctx.value)
     return None
 
 

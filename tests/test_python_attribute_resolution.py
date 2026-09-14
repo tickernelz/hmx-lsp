@@ -133,3 +133,14 @@ def test_the_cursor_on_the_base_is_not_treated_as_a_field():
     server = MockServer({URI: source})
     ctx = resolve_py_cursor(source, index + 1, col, server.resolver)
     assert ctx is None or ctx.value != "status"
+
+
+def test_attribute_cursor_without_resolver_does_not_raise():
+    source = HEADER + "        value = self.status\n"
+    line = next(i for i, text in enumerate(source.splitlines()) if "self.status" in text)
+    col = source.splitlines()[line].index("status") + 2
+    context = resolve_py_cursor(source, line + 1, col)
+
+    assert context is not None
+    assert context.kind == "field"
+    assert context.value == "status"

@@ -14,11 +14,13 @@ class Resolver:
         self._computes: dict[str, dict[str, str]] = {}
         self._kinds: dict[str, dict[str, str]] = {}
         self._mro: dict[str, list[str]] = {}
+        self._method_result_models: dict[tuple[str, str], str | None] = {}
 
     def known(self, model: str) -> bool:
         return self.index.known(model)
 
     def invalidate(self, models: set[str] | None = None) -> None:
+        self._method_result_models.clear()
         if not models:
             self._fields.clear()
             self._methods.clear()
