@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import re
 
+from hmx_core.pysource import Constants
 from hmx_core.locals import (
     class_model,
     enclosing_function,
@@ -47,10 +48,10 @@ class _NodeFinder(ast.NodeVisitor):
         super().generic_visit(node)
 
 
-def _find_enclosing_model(stack: list[ast.AST], resolver=None) -> str | None:
+def _find_enclosing_model(stack: list[ast.AST], resolver=None, constants=None) -> str | None:
     for node in reversed(stack):
         if isinstance(node, ast.ClassDef):
-            return class_model(node, resolver)
+            return class_model(node, constants)
     return None
 
 
@@ -77,7 +78,8 @@ def _incomplete_attribute(content: str, line: int, col: int,
     if not finder.best:
         return None
     stack = finder.best
-    active_model = _find_enclosing_model(stack, resolver)
+    constants = Constants(tree)
+    active_model = _find_enclosing_model(stack, resolver, constants)
     node = next((item for item in reversed(stack)
                  if isinstance(item, ast.Attribute) and item.attr == "__hmx_cursor"), None)
     if node is None:
@@ -107,7 +109,8 @@ def resolve_py_cursor(content: str, line: int, col: int,
 
     stack = finder.best
     node = stack[-1]
-    active_model = _find_enclosing_model(stack, resolver)
+    constants = Constants(tree)
+    active_model = _find_enclosing_model(stack, resolver, constants)
 
     if isinstance(node, ast.Attribute):
         base = node.value

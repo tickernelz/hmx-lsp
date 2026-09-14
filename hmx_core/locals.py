@@ -3,6 +3,8 @@ from __future__ import annotations
 import ast
 from typing import Protocol
 
+from hmx_core.pysource import Constants
+
 SELF_NAMES = frozenset({"self"})
 CHAINING_METHODS = frozenset({
     "filtered", "filtered_domain", "sorted", "browse", "exists", "search", "sudo",
@@ -57,9 +59,10 @@ def _literal_strings(node: ast.AST) -> list[str]:
     return []
 
 
-def class_model(node: ast.ClassDef, resolver: ModelResolver | None = None) -> str | None:
+def class_model(node: ast.ClassDef, constants: Constants | None = None) -> str | None:
     explicit: str | None = None
     parents: list[str] = []
+    scope = constants.scoped(node) if constants else None
     for item in node.body:
         if not (isinstance(item, ast.ClassDef) and item.name == "Meta"):
             continue
@@ -70,20 +73,18 @@ def class_model(node: ast.ClassDef, resolver: ModelResolver | None = None) -> st
                 if not isinstance(target, ast.Name):
                     continue
                 if target.id == "name":
-                    values = _literal_strings(stmt.value)
+                    value = scope.string(stmt.value) if scope else None
+                    values = [value] if value else _literal_strings(stmt.value)
                     if values:
                         explicit = values[0].lower()
                 elif target.id in ("inherit", "inherits"):
-                    parents.extend(value.lower().split(".")[-1]
-                                   for value in _literal_strings(stmt.value))
+                    values = scope.strings(stmt.value) if scope else _literal_strings(stmt.value)
+                    parents.extend(value.lower().split(".")[-1] for value in values)
     if explicit:
         return explicit
     if len(parents) == 1:
         return parents[0]
-    candidate = node.name.lower()
-    if resolver is None or resolver.known(candidate):
-        return candidate
-    return candidate
+    return node.name.lower()
 
 
 def model_of_expr(node: ast.AST, bindings: dict[str, str], model: str | None,

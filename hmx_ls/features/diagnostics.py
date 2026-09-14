@@ -13,6 +13,7 @@ from hmx_core.assets import assets_from_source
 from hmx_core.expressions import refs_for_attribute
 from hmx_core.locals import class_model
 from hmx_core.manifest import owner_of
+from hmx_core.pysource import Constants
 from hmx_core.naming import is_domain_keyword, is_known_model, resolve_model
 from hmx_ls.cursor.common import safe_relpath, uri_to_path
 from hmx_ls.cursor.js_cursor import RE_API_URL, RE_METHOD_KEY, RE_MODEL_KEY
@@ -252,8 +253,8 @@ def _diagnose_xml(server, content: str, module: str | None) -> list[types.Diagno
     return out
 
 
-def _model_of_class(node: ast.ClassDef, resolver=None) -> str | None:
-    return class_model(node, resolver)
+def _model_of_class(node: ast.ClassDef, constants=None) -> str | None:
+    return class_model(node, constants)
 
 
 def _class_call_diagnostics(server, model: str, methods, call: ast.Call,
@@ -313,8 +314,8 @@ def _class_decorator_diagnostics(server, model: str, fields, item,
                 current_fields = server.resolver.fields(nxt)
 
 
-def _class_diagnostics(server, node: ast.ClassDef, out: list[types.Diagnostic]) -> None:
-    model = _model_of_class(node, server.resolver)
+def _class_diagnostics(server, node: ast.ClassDef, out: list[types.Diagnostic], constants=None) -> None:
+    model = _model_of_class(node, constants)
     if not model or not server.resolver.known(model):
         return
     fields = server.resolver.fields(model)
@@ -359,6 +360,7 @@ def _diagnose_python(server, content: str, module: str | None) -> list[types.Dia
 
     class_out: list[types.Diagnostic] = []
     env_out: list[types.Diagnostic] = []
+    constants = Constants(tree)
     todo = deque([tree])
     pop = todo.popleft
     push = todo.append
@@ -383,7 +385,7 @@ def _diagnose_python(server, content: str, module: str | None) -> list[types.Dia
             if base.__class__ is ast.Attribute and base.attr == "env":
                 _env_model_diagnostic(server, node, env_out)
         elif cls is ast.ClassDef:
-            _class_diagnostics(server, node, class_out)
+            _class_diagnostics(server, node, class_out, constants)
 
     return class_out + env_out
 
