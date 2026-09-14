@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import ast
+import re
 
 from hmx_core.locals import (
+    class_model,
     enclosing_function,
     is_framework_attr,
     local_models,
@@ -45,18 +47,50 @@ class _NodeFinder(ast.NodeVisitor):
         super().generic_visit(node)
 
 
-def _find_enclosing_model(stack: list[ast.AST]) -> str | None:
+def _find_enclosing_model(stack: list[ast.AST], resolver=None) -> str | None:
     for node in reversed(stack):
         if isinstance(node, ast.ClassDef):
-            for item in node.body:
-                if isinstance(item, ast.ClassDef) and item.name == "Meta":
-                    for stmt in item.body:
-                        if isinstance(stmt, ast.Assign):
-                            for target in stmt.targets:
-                                if isinstance(target, ast.Name) and target.id == "name":
-                                    if isinstance(stmt.value, ast.Constant) and isinstance(stmt.value.value, str):
-                                        return stmt.value.value.lower()
+            return class_model(node, resolver)
     return None
+
+
+def _incomplete_attribute(content: str, line: int, col: int,
+                           resolver=None) -> PyCursorContext | None:
+    lines = content.splitlines()
+    if line < 1 or line > len(lines):
+        return None
+    text = lines[line - 1]
+    prefix = text[:col]
+    match = re.search(r"(?P<base>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\.(?P<partial>(?:[A-Za-z_]\w*)?)$",
+                      prefix)
+    if not match:
+        return None
+    line_start = sum(len(item) + 1 for item in lines[:line - 1])
+    replacement_start = line_start + match.start("partial")
+    synthetic = content[:replacement_start] + "__hmx_cursor" + content[line_start + col:]
+    try:
+        tree = ast.parse(synthetic)
+    except SyntaxError:
+        return None
+    finder = _NodeFinder(line, col)
+    finder.visit(tree)
+    if not finder.best:
+        return None
+    stack = finder.best
+    active_model = _find_enclosing_model(stack, resolver)
+    node = next((item for item in reversed(stack)
+                 if isinstance(item, ast.Attribute) and item.attr == "__hmx_cursor"), None)
+    if node is None:
+        return None
+    func = enclosing_function(stack)
+    bindings = local_models(func, active_model, resolver) if func is not None else {}
+    owner = model_of_expr(node.value, bindings, active_model, resolver)
+    if not owner:
+        return None
+    dot = node.value.end_col_offset + 1
+    return PyCursorContext(kind="field_prefix", value=match.group("partial"),
+                           active_model=owner,
+                           range=((line, dot), (line, col)))
 
 
 def resolve_py_cursor(content: str, line: int, col: int,
@@ -64,7 +98,7 @@ def resolve_py_cursor(content: str, line: int, col: int,
     try:
         tree = ast.parse(content)
     except SyntaxError:
-        return None
+        return _incomplete_attribute(content, line, col, resolver)
 
     finder = _NodeFinder(line, col)
     finder.visit(tree)
@@ -73,7 +107,7 @@ def resolve_py_cursor(content: str, line: int, col: int,
 
     stack = finder.best
     node = stack[-1]
-    active_model = _find_enclosing_model(stack)
+    active_model = _find_enclosing_model(stack, resolver)
 
     if isinstance(node, ast.Attribute):
         base = node.value

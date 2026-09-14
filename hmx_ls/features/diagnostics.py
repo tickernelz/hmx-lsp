@@ -11,6 +11,7 @@ from lxml import etree
 
 from hmx_core.assets import assets_from_source
 from hmx_core.expressions import refs_for_attribute
+from hmx_core.locals import class_model
 from hmx_core.manifest import owner_of
 from hmx_core.naming import is_domain_keyword, is_known_model, resolve_model
 from hmx_ls.cursor.common import safe_relpath, uri_to_path
@@ -251,19 +252,8 @@ def _diagnose_xml(server, content: str, module: str | None) -> list[types.Diagno
     return out
 
 
-def _model_of_class(node: ast.ClassDef) -> str | None:
-    for item in node.body:
-        if not isinstance(item, ast.ClassDef) or item.name != "Meta":
-            continue
-        for stmt in item.body:
-            if not isinstance(stmt, ast.Assign):
-                continue
-            for target in stmt.targets:
-                if (isinstance(target, ast.Name) and target.id == "name"
-                        and isinstance(stmt.value, ast.Constant)
-                        and isinstance(stmt.value.value, str)):
-                    return stmt.value.value.lower()
-    return None
+def _model_of_class(node: ast.ClassDef, resolver=None) -> str | None:
+    return class_model(node, resolver)
 
 
 def _class_call_diagnostics(server, model: str, methods, call: ast.Call,
@@ -324,7 +314,7 @@ def _class_decorator_diagnostics(server, model: str, fields, item,
 
 
 def _class_diagnostics(server, node: ast.ClassDef, out: list[types.Diagnostic]) -> None:
-    model = _model_of_class(node)
+    model = _model_of_class(node, server.resolver)
     if not model or not server.resolver.known(model):
         return
     fields = server.resolver.fields(model)

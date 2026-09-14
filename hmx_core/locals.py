@@ -46,6 +46,46 @@ def _env_model(node: ast.AST) -> str | None:
     return None
 
 
+def _literal_strings(node: ast.AST) -> list[str]:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return [node.value]
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        out: list[str] = []
+        for item in node.elts:
+            out.extend(_literal_strings(item))
+        return out
+    return []
+
+
+def class_model(node: ast.ClassDef, resolver: ModelResolver | None = None) -> str | None:
+    explicit: str | None = None
+    parents: list[str] = []
+    for item in node.body:
+        if not (isinstance(item, ast.ClassDef) and item.name == "Meta"):
+            continue
+        for stmt in item.body:
+            if not isinstance(stmt, ast.Assign):
+                continue
+            for target in stmt.targets:
+                if not isinstance(target, ast.Name):
+                    continue
+                if target.id == "name":
+                    values = _literal_strings(stmt.value)
+                    if values:
+                        explicit = values[0].lower()
+                elif target.id in ("inherit", "inherits"):
+                    parents.extend(value.lower().split(".")[-1]
+                                   for value in _literal_strings(stmt.value))
+    if explicit:
+        return explicit
+    if len(parents) == 1:
+        return parents[0]
+    candidate = node.name.lower()
+    if resolver is None or resolver.known(candidate):
+        return candidate
+    return candidate
+
+
 def model_of_expr(node: ast.AST, bindings: dict[str, str], model: str | None,
                   resolver: ModelResolver | None) -> str | None:
     if isinstance(node, ast.Name):
