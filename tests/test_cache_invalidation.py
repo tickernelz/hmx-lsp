@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import os
+import pathlib
 
 import pytest
 
-from hmx_core.cache import load, save
+from hmx_core.cache import _digest, load, save
 from hmx_core.index import build, indexed_files
 
 
@@ -55,3 +56,23 @@ def test_cache_invalidates_when_a_non_python_layer_changes(tmp_path, rel, body, 
         fh.write(body)
 
     assert load(root, indexed_files(root), name=f"test-{probe}") is None
+
+
+def test_old_cache_format_is_rejected_after_index_shape_changes(tmp_path):
+    import pickle
+
+    from hmx_core.cache import path_for
+
+    _module(tmp_path)
+    root = str(tmp_path)
+    paths = indexed_files(root)
+    index = build(root)
+    target = path_for(root, "old")
+    pathlib.Path(target).parent.mkdir(parents=True, exist_ok=True)
+    pathlib.Path(target).write_bytes(pickle.dumps({
+        "format": 3,
+        "digest": _digest(root, paths),
+        "index": index,
+    }))
+
+    assert load(root, paths, name="old") is None
