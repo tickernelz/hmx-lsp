@@ -1,6 +1,6 @@
 id = "hmx-lsp"
 name = "HMX Language Server"
-version = "0.3.3"
+version = "0.3.4"
 schema_version = 1
 authors = ["Hashmicro <dev@hashmicro.com>"]
 description = "Cross-layer language server for HMX framework in Zed"
