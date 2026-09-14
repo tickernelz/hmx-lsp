@@ -33,6 +33,7 @@ class ModelEntry:
     edges: set[str] = field(default_factory=set)
     sites: list[Loc] = field(default_factory=list)
     methods: dict[str, Loc] = field(default_factory=dict)
+    method_sites: dict[str, list[Loc]] = field(default_factory=dict)
     kinds: dict[str, str] = field(default_factory=dict)
     selections: dict[str, list[str]] = field(default_factory=dict)
     computes: dict[str, str] = field(default_factory=dict)
@@ -81,6 +82,9 @@ class Index:
                 got.sites = [s for s in got.sites if s.path != rel_path]
                 got.declared = {k: v for k, v in got.declared.items() if v.path != rel_path}
                 got.methods = {k: v for k, v in got.methods.items() if v.path != rel_path}
+                got.method_sites = {k: [v for v in values if v.path != rel_path]
+                                    for k, values in got.method_sites.items()}
+                got.method_sites = {k: values for k, values in got.method_sites.items() if values}
             fresh: list[str] = []
             for decl in decls:
                 entry = self.entry(decl.model)
@@ -89,6 +93,8 @@ class Index:
                 affected.add(decl.model)
                 entry.edges |= set(decl.parents) | set(decl.delegates)
                 entry.methods.update(decl.methods)
+                for name, loc in decl.methods.items():
+                    entry.method_sites.setdefault(name, []).append(loc)
                 entry.kinds.update(kinds_of(decl))
                 entry.selections.update(selections_of(decl))
                 entry.computes.update(computes_of(decl))
@@ -264,6 +270,7 @@ def assemble(decls: list[ClassDecl], modules: dict[str, Module],
         index.file_models.setdefault(decl.loc.path, []).append(decl.model)
         for name, loc in decl.methods.items():
             entry.methods.setdefault(name, loc)
+            entry.method_sites.setdefault(name, []).append(loc)
         for name, kind in kinds_of(decl).items():
             entry.kinds.setdefault(name, kind)
         for name, choices in selections_of(decl).items():

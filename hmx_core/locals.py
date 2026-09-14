@@ -223,6 +223,13 @@ def resolver_methods(resolver: ModelResolver, model: str) -> dict[str, object]:
     return getter(model) if getter is not None else {}
 
 
+def super_method_model(model: str, method: str, resolver: ModelResolver) -> str | None:
+    entry = getattr(resolver, "index", None)
+    parents = getattr(entry.models.get(model), "edges", set()) if entry else set()
+    matches = [parent for parent in parents if method in resolver.methods(parent)]
+    return matches[0] if len(matches) == 1 else None
+
+
 def model_of_expr(node: ast.AST, bindings: dict[str, str], model: str | None,
                   resolver: ModelResolver | None) -> str | None:
     if isinstance(node, ast.Name):
@@ -242,6 +249,16 @@ def model_of_expr(node: ast.AST, bindings: dict[str, str], model: str | None,
 
     if isinstance(node, ast.Call):
         func = node.func
+        if isinstance(func, ast.Name) and func.id == "getattr" and len(node.args) >= 2:
+            base = model_of_expr(node.args[0], bindings, model, resolver)
+            attr = node.args[1]
+            if base and resolver is not None and isinstance(attr, ast.Constant) and isinstance(attr.value, str):
+                return resolver.comodel(base, attr.value)
+            return None
+        if isinstance(func, ast.Name) and func.id == "cast" and len(node.args) >= 2:
+            return model_of_expr(node.args[1], bindings, model, resolver)
+        if isinstance(func, ast.Name) and func.id == "super":
+            return model
         if isinstance(func, ast.Attribute):
             if func.attr in CHAINING_METHODS:
                 return model_of_expr(func.value, bindings, model, resolver)
@@ -274,7 +291,9 @@ def model_of_expr(node: ast.AST, bindings: dict[str, str], model: str | None,
     if isinstance(node, ast.IfExp):
         body = None if _empty_return(node.body) else model_of_expr(node.body, bindings, model, resolver)
         orelse = None if _empty_return(node.orelse) else model_of_expr(node.orelse, bindings, model, resolver)
-        return body if body and body == orelse else None
+        if not body or not orelse:
+            return body or orelse
+        return body if body == orelse else None
 
     if isinstance(node, ast.BoolOp):
         models = [model_of_expr(value, bindings, model, resolver) for value in node.values]

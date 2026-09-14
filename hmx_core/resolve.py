@@ -147,6 +147,18 @@ class Resolver:
             self._kinds[model] = out
         return out
 
+    def super_method_location(self, model: str, method: str, current_line: int | None = None) -> Loc | None:
+        entry = self.index.models.get(model)
+        if entry is None:
+            return None
+        sites = entry.method_sites.get(method, [])
+        primary = entry.methods.get(method)
+        if current_line is not None:
+            candidates = [loc for loc in sites if loc.line != current_line]
+        else:
+            candidates = [loc for loc in sites if loc != primary]
+        return candidates[0] if len(candidates) == 1 else None
+
     def field_kind(self, model: str, name: str) -> str | None:
         return self.kinds(model).get(name)
 

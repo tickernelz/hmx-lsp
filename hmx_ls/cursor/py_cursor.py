@@ -12,6 +12,7 @@ from hmx_core.locals import (
     is_user_receiver,
     is_model_data_receiver,
     local_models,
+    super_method_model,
     model_of_expr,
 )
 from dataclasses import dataclass
@@ -25,6 +26,7 @@ class PyCursorContext:
     hop_index: int = 0
     secondary_value: str | None = None
     range: tuple[tuple[int, int], tuple[int, int]] | None = None
+    method_loc: object | None = None
 
 
 class _NodeFinder(ast.NodeVisitor):
@@ -126,6 +128,9 @@ def resolve_py_cursor(content: str, line: int, col: int,
             if func is not None:
                 bindings = local_models(func, active_model, resolver)
                 owner = model_of_expr(base, bindings, active_model, resolver)
+            if (owner and resolver is not None and isinstance(base, ast.Call)
+                    and isinstance(base.func, ast.Name) and base.func.id == "super"):
+                owner = super_method_model(owner, node.attr, resolver) or owner
             if owner:
                 start = dot_end + 1
                 rng = ((node.lineno, start), (node.end_lineno, start + len(node.attr)))
@@ -135,8 +140,16 @@ def resolve_py_cursor(content: str, line: int, col: int,
                     kind = "field_prefix"
                 if kind == "field" and is_framework_attr(node.attr):
                     return None
+                target_loc = None
+                if (kind == "method" and resolver is not None
+                        and isinstance(base, ast.Call)
+                        and isinstance(base.func, ast.Name)
+                        and base.func.id == "super"):
+                    target_loc = getattr(resolver, "super_method_location", lambda *_: None)(
+                        owner, node.attr, func.lineno if func is not None else None)
                 return PyCursorContext(kind=kind, value=node.attr,
-                                       active_model=owner, range=rng)
+                                       active_model=owner, range=rng,
+                                       method_loc=target_loc)
 
     for p_node in reversed(stack):
         if isinstance(p_node, ast.Attribute):
@@ -193,6 +206,15 @@ def resolve_py_cursor(content: str, line: int, col: int,
             if isinstance(parent, ast.Call):
                 func = parent.func
                 func_name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+                if (isinstance(func, ast.Name) and func.id == "getattr"
+                        and len(parent.args) >= 2 and parent.args[1] is node):
+                    owner = model_of_expr(parent.args[0],
+                                          local_models(enclosing_function(stack), active_model, resolver)
+                                          if enclosing_function(stack) else {},
+                                          active_model, resolver)
+                    if owner:
+                        return PyCursorContext(kind="field", value=val,
+                                               active_model=owner, range=rng)
                 func_mod = func.value.id if (isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name)) else ""
 
                 if func_mod == "api":

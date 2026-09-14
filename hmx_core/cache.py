@@ -4,7 +4,7 @@ import hashlib
 import os
 import pickle
 
-FORMAT = 3
+FORMAT = 4
 
 
 def _cache_home() -> str:

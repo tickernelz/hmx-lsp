@@ -162,7 +162,7 @@ def _from_xml(server, content: str, line: int, col: int, module: str | None) -> 
     if ctx.kind == "method":
         if not ctx.active_model:
             return []
-        return _at(server, server.resolver.methods(ctx.active_model).get(ctx.value))
+        return _at(server, getattr(ctx, "method_loc", None) or server.resolver.methods(ctx.active_model).get(ctx.value))
     if ctx.kind == "model":
         return _model_sites(server, ctx.value)
     if ctx.kind == "widget":
@@ -190,7 +190,8 @@ def _from_python(server, content: str, line: int, col: int, module: str | None) 
     if ctx.kind == "field" and ctx.active_model:
         return _at(server, server.resolver.fields(ctx.active_model).get(ctx.value))
     if ctx.kind == "method" and ctx.active_model:
-        return _at(server, server.resolver.methods(ctx.active_model).get(ctx.value))
+        return _at(server, getattr(ctx, "method_loc", None)
+                   or server.resolver.methods(ctx.active_model).get(ctx.value))
     return []
 
 

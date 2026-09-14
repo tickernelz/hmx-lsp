@@ -98,8 +98,8 @@ def _model_card(server, model: str) -> types.Hover | None:
     return _markdown(lines)
 
 
-def _method_card(server, model: str, name: str) -> types.Hover | None:
-    loc = server.resolver.methods(model).get(name)
+def _method_card(server, model: str, name: str, loc=None) -> types.Hover | None:
+    loc = loc or server.resolver.methods(model).get(name)
     if loc is None:
         return None
     return _markdown([f"### Method `{name}()`", "",
@@ -220,7 +220,7 @@ def _from_xml(server, content: str, line: int, col: int, module: str | None) -> 
         prefix = "Field" if ctx.kind == "field" else f"`{ctx.attribute}` field"
         return _field_card(server, ctx.active_model, head, prefix)
     if ctx.kind == "method" and ctx.active_model:
-        return _method_card(server, ctx.active_model, ctx.value)
+        return _method_card(server, ctx.active_model, ctx.value, getattr(ctx, "method_loc", None))
     if ctx.kind == "model":
         return _model_card(server, ctx.value)
     if ctx.kind == "widget":
@@ -258,7 +258,8 @@ def _from_python(server, content: str, line: int, col: int, module: str | None) 
     if ctx.kind == "field" and ctx.active_model:
         return _field_card(server, ctx.active_model, ctx.value)
     if ctx.kind == "method" and ctx.active_model:
-        return _method_card(server, ctx.active_model, ctx.value)
+        return _method_card(server, ctx.active_model, ctx.value,
+                            getattr(ctx, "method_loc", None))
     return None
 
 
