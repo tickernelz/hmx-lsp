@@ -27,6 +27,7 @@ class XmlCursorContext:
     tag: str | None = None
     inherit_ref: str | None = None
     range: tuple[tuple[int, int], tuple[int, int]] | None = None
+    reference: bool = False
 
 
 def _attribute_at(line_text: str, line: int, col: int) -> tuple[str, str, tuple, int] | None:
@@ -47,21 +48,29 @@ def _record_of(elem):
     return None
 
 
+def _canonical_model(value: str | None) -> str | None:
+    if not value:
+        return None
+    model = value.split(".")[-1].lower()
+    return model[6:] if model.startswith("model_") else model
+
+
 def _record_facts(record) -> tuple[str | None, str | None]:
     if record is None:
         return None, None
-    model = None
+    record_model = (record.get("model") or "").split(".")[-1].lower() or None
+    model = record_model
     inherit = None
+    view_record = record_model in {"baseuiview", "ir.ui.view", "ui.view", "view"}
     for child in record:
         if not isinstance(child.tag, str) or child.tag != "field":
             continue
         name = child.get("name")
-        if name in MODEL_FIELDS and model is None:
-            model = child.get("ref") or (child.text or "").strip() or None
-        elif name == "inherit" and inherit is None:
+        if name == "inherit" and inherit is None:
             inherit = child.get("ref") or (child.text or "").strip() or None
-    if model:
-        model = model.split(".")[-1].lower()
+        elif name == "model" and view_record:
+            model = (_canonical_model(child.get("ref"))
+                     if child.get("ref") else (child.text or "").strip().split(".")[-1].lower())
     return model, inherit
 
 
@@ -86,15 +95,59 @@ def _active_model(elem, root_model: str | None, resolver: Resolver | None) -> st
     return current
 
 
-def _element_at(root, line: int):
-    best = None
-    for elem in root.iter():
-        if not isinstance(elem.tag, str):
+def _start_tag_spans(content: str, root):
+    spans = []
+    elements = [elem for elem in root.iter() if isinstance(elem.tag, str)]
+    element_index = 0
+    i = 0
+    line = 1
+    col = 0
+    while i < len(content) and element_index < len(elements):
+        if content[i] == "\n":
+            line += 1
+            col = 0
+            i += 1
             continue
-        if getattr(elem, "sourceline", None) == line:
-            best = elem
+        if content[i] != "<" or i + 1 >= len(content) or content[i + 1] in "!?/":
+            col += 1
+            i += 1
+            continue
+        j = i + 1
+        quote = None
+        while j < len(content):
+            char = content[j]
+            if quote:
+                if char == quote:
+                    quote = None
+            elif char in "\"'":
+                quote = char
+            elif char == ">":
+                break
+            j += 1
+        if j >= len(content):
             break
-    return best
+        elem = elements[element_index]
+        spans.append((elem, line, col, j + 1))
+        element_index += 1
+        segment = content[i:j + 1]
+        newlines = segment.count("\n")
+        if newlines:
+            line += newlines
+            col = len(segment.rsplit("\n", 1)[1])
+        else:
+            col += len(segment)
+        i = j + 1
+    return spans
+
+
+def _element_at(root, content: str, line: int, col: int):
+    for elem, start_line, start_col, end_offset in _start_tag_spans(content, root):
+        segment = content[:end_offset]
+        end_line = segment.count("\n") + 1
+        end_col = len(segment.rsplit("\n", 1)[-1])
+        if (start_line, start_col) <= (line, col) <= (end_line, end_col):
+            return elem
+    return None
 
 
 def _expression_context(attr: str, value: str, col: int, value_start: int,
@@ -146,7 +199,7 @@ def resolve_xml_cursor(content: str, line: int, col: int,
                                     attribute=attr_name, range=span)
         return None
 
-    elem = _element_at(root, line)
+    elem = _element_at(root, content, line, col)
     tag = elem.tag if elem is not None else None
     record = _record_of(elem) if elem is not None else None
     root_model, inherit = _record_facts(record)
@@ -170,11 +223,18 @@ def resolve_xml_cursor(content: str, line: int, col: int,
         return XmlCursorContext(kind="field", value=attr_value or "", active_model=model,
                                 attribute=attr_name, tag=tag, inherit_ref=inherit, range=span)
 
+    if attr_name == "ref" and tag == "field" and elem.get("name") in MODEL_FIELDS:
+        raw = attr_value or ""
+        value = _canonical_model(raw) or raw
+        return XmlCursorContext(kind="model", value=value, active_model=value,
+                                attribute=elem.get("name"), tag=tag, inherit_ref=inherit,
+                                range=span, reference=True)
+
     if attr_name == "name" and tag == "button":
         button_type = elem.get("type") if elem is not None else None
         value = attr_value or ""
         if button_type == "action" or value.startswith("%("):
-            stripped = value[2:].rstrip(")ds") if value.startswith("%(") else value
+            stripped = value[2:value.rfind(")")] if value.startswith("%(") else value
             return XmlCursorContext(kind="xmlid", value=stripped, active_model=model,
                                     attribute=attr_name, tag=tag, inherit_ref=inherit, range=span)
         return XmlCursorContext(kind="method", value=value, active_model=model,

@@ -8,6 +8,9 @@ from hmx_core.locals import (
     class_model,
     enclosing_function,
     is_framework_attr,
+    is_env_receiver,
+    is_user_receiver,
+    is_model_data_receiver,
     local_models,
     model_of_expr,
 )
@@ -145,15 +148,45 @@ def resolve_py_cursor(content: str, line: int, col: int,
 
     if isinstance(node, ast.Name):
         rng = ((node.lineno, node.col_offset), (node.end_lineno, node.end_col_offset))
+        if len(stack) >= 2:
+            parent = stack[-2]
+            if isinstance(parent, ast.Assign):
+                names = [target.id for target in parent.targets if isinstance(target, ast.Name)]
+                value = Constants(tree).string(parent.value)
+                if value and any(name.endswith(("_XMLID", "_GROUP")) for name in names):
+                    return PyCursorContext(kind="xmlid", value=value,
+                                           active_model=active_model, range=rng)
+            if isinstance(parent, ast.Call) and isinstance(parent.func, ast.Attribute):
+                owner = parent.func.value
+                is_env_ref = parent.func.attr == "ref" and is_env_receiver(owner)
+                is_group_ref = parent.func.attr == "has_group" and is_user_receiver(owner)
+                is_model_data = parent.func.attr == "xmlid_to_res_id" and is_model_data_receiver(owner)
+                if is_env_ref or is_group_ref or is_model_data:
+                    value = Constants(tree).string(node)
+                    if value:
+                        return PyCursorContext(kind="xmlid", value=value,
+                                               active_model=active_model, range=rng)
         if len(stack) >= 2 and isinstance(stack[-2], ast.Assign):
             parent = stack[-2]
             if node in parent.targets:
+                if node.id.endswith(("_XMLID", "_GROUP")):
+                    value = Constants(tree).string(parent.value)
+                    if value:
+                        return PyCursorContext(kind="xmlid", value=value,
+                                               active_model=active_model, range=rng)
                 return PyCursorContext(kind="field", value=node.id, active_model=active_model, range=rng)
         return PyCursorContext(kind="name", value=node.id, active_model=active_model, range=rng)
 
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         val = node.value
         rng = ((node.lineno, node.col_offset), (node.end_lineno, node.end_col_offset))
+        assignment = next((item for item in reversed(stack[:-1])
+                           if isinstance(item, ast.Assign) and item.value is node), None)
+        if assignment is not None:
+            names = [target.id for target in assignment.targets if isinstance(target, ast.Name)]
+            if any(name.endswith(("_XMLID", "_GROUP")) for name in names):
+                return PyCursorContext(kind="xmlid", value=val,
+                                       active_model=active_model, range=rng)
         if len(stack) >= 2:
             parent = stack[-2]
 
@@ -197,8 +230,13 @@ def resolve_py_cursor(content: str, line: int, col: int,
                 if func_name in ("ForeignKey", "OneToOneField", "ManyToManyField"):
                     target_model = val.split(".")[-1].lower()
                     return PyCursorContext(kind="model", value=target_model,
-                                           active_model=active_model, range=rng)
-                if func_name == "ref":
+                                           active_model=active_model,
+                                           secondary_value=val, range=rng)
+                owner = func.value if isinstance(func, ast.Attribute) else None
+                is_env_ref = func_name == "ref" and is_env_receiver(owner)
+                is_group_ref = func_name == "has_group" and is_user_receiver(owner)
+                if is_env_ref or is_group_ref or (func_name == "xmlid_to_res_id"
+                        and is_model_data_receiver(owner)):
                     return PyCursorContext(kind="xmlid", value=val,
                                            active_model=active_model, range=rng)
 
@@ -212,6 +250,10 @@ def resolve_py_cursor(content: str, line: int, col: int,
                     if isinstance(base, ast.Name) and base.id == "env":
                         return PyCursorContext(kind="model", value=val.lower(),
                                                active_model=active_model, range=rng)
+
+            if isinstance(parent, ast.keyword) and parent.arg in ("compute", "inverse", "search"):
+                return PyCursorContext(kind="method", value=val,
+                                       active_model=active_model, range=rng)
 
             if isinstance(parent, ast.keyword) and parent.arg in ("related", "depends"):
                 parts = val.split(".")

@@ -6,6 +6,7 @@ import os
 from lsprotocol import types
 
 from hmx_core.locations import Loc
+from hmx_core.manifest import owner_of
 from hmx_core.locals import class_model, local_models, model_of_expr
 from hmx_core.pysource import Constants, parse_source
 from hmx_ls.cursor.common import loc_to_range, path_to_uri, uri_to_path
@@ -115,6 +116,14 @@ def _method_references(server, model: str, method: str) -> list[types.Location]:
     return _dedupe(out)
 
 
+def _xmlid_references(server, xmlid: str, module: str | None) -> list[types.Location]:
+    entry = server.index.xmlids.get(xmlid, module)
+    if entry is None:
+        return []
+    found = _location(server, entry.loc)
+    return [found] if found else []
+
+
 def _component_references(server, name: str) -> list[types.Location]:
     out: list[types.Location] = []
     webx = server.index.webx
@@ -160,6 +169,7 @@ def resolve_references(server, uri: str, position: types.Position) -> list[types
     field: str | None = None
     method: str | None = None
     component: str | None = None
+    xmlid: str | None = None
 
     if path.endswith(".xml"):
         ctx = resolve_xml_cursor(content, line, col, server.resolver)
@@ -170,6 +180,8 @@ def resolve_references(server, uri: str, position: types.Position) -> list[types
                 model, method = ctx.active_model, ctx.value
             elif ctx.kind == "model":
                 model = ctx.value
+            elif ctx.kind == "xmlid":
+                xmlid = ctx.value
             elif ctx.kind in ("widget", "component"):
                 component = ctx.value
     elif path.endswith(".py"):
@@ -186,6 +198,8 @@ def resolve_references(server, uri: str, position: types.Position) -> list[types
                 model, field = ctx.active_model, ctx.value
             elif ctx.kind == "method":
                 model, method = ctx.active_model, ctx.value
+            elif ctx.kind == "xmlid":
+                xmlid = ctx.value
     elif path.endswith((".js", ".vue")):
         ctx = resolve_js_cursor(content, line, col)
         if ctx:
@@ -196,6 +210,8 @@ def resolve_references(server, uri: str, position: types.Position) -> list[types
             elif ctx.kind in ("component", "template", "widget"):
                 component = ctx.value
 
+    if xmlid:
+        return _dedupe(_xmlid_references(server, xmlid, owner_of(os.path.relpath(path, server.root))))
     if component:
         return _dedupe(_component_references(server, component))
     if model and field:

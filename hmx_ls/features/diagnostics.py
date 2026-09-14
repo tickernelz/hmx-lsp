@@ -11,7 +11,7 @@ from lxml import etree
 
 from hmx_core.assets import assets_from_source
 from hmx_core.expressions import refs_for_attribute
-from hmx_core.locals import class_model
+from hmx_core.locals import class_model, is_env_receiver, is_user_receiver, is_model_data_receiver
 from hmx_core.manifest import owner_of
 from hmx_core.pysource import Constants, parse_source
 from hmx_core.naming import is_domain_keyword, is_known_model, resolve_model
@@ -337,19 +337,23 @@ def _env_model_diagnostic(server, node: ast.Subscript, out: list[types.Diagnosti
 
 
 def _env_ref_diagnostic(server, node: ast.Call, module: str | None,
-                        out: list[types.Diagnostic]) -> None:
+                        out: list[types.Diagnostic], constants=None) -> None:
     owner = node.func.value
-    if not ((isinstance(owner, ast.Attribute) and owner.attr == "env")
-            or (isinstance(owner, ast.Name) and owner.id == "env")):
-        return
-    if not node.args:
+    name = node.func.attr
+    is_env_ref = name == "ref" and is_env_receiver(owner)
+    is_group_ref = name == "has_group" and is_user_receiver(owner)
+    is_model_data = name == "xmlid_to_res_id" and is_model_data_receiver(owner)
+    if not (is_env_ref or is_group_ref or is_model_data) or not node.args:
         return
     arg = node.args[0]
-    if (isinstance(arg, ast.Constant) and isinstance(arg.value, str)
-            and not _known_xmlid(server, arg.value, module)):
+    value = arg.value if isinstance(arg, ast.Constant) and isinstance(arg.value, str) else (
+        constants.string(arg) if constants is not None else None)
+    if value and not _known_xmlid(server, value, module):
+        kind = "group" if is_group_ref else "XMLID"
+        context = "env.ref(...)" if is_env_ref else f"{name}(...)"
         out.append(_error(arg.lineno - 1, arg.col_offset, arg.end_col_offset,
-                          f"Unknown XMLID '{arg.value}' in env.ref(...)",
-                          "hmx-unknown-xmlid"))
+                          f"Unknown {kind} '{value}' in {context}",
+                          "hmx-unknown-group" if is_group_ref else "hmx-unknown-xmlid"))
 
 
 def _diagnose_python(server, content: str, module: str | None) -> list[types.Diagnostic]:
@@ -378,11 +382,15 @@ def _diagnose_python(server, content: str, module: str | None) -> list[types.Dia
         cls = node.__class__
         if cls is ast.Call:
             func = node.func
-            if func.__class__ is ast.Attribute and func.attr == "ref":
-                _env_ref_diagnostic(server, node, module, env_out)
+            if (func.__class__ is ast.Attribute
+                    and (func.attr in ("ref", "has_group")
+                         or (func.attr == "xmlid_to_res_id"
+                             and is_model_data_receiver(func.value)))):
+                _env_ref_diagnostic(server, node, module, env_out, constants)
         elif cls is ast.Subscript:
             base = node.value
-            if base.__class__ is ast.Attribute and base.attr == "env":
+            owner_ok = is_env_receiver(base)
+            if owner_ok:
                 _env_model_diagnostic(server, node, env_out)
         elif cls is ast.ClassDef:
             _class_diagnostics(server, node, class_out, constants)

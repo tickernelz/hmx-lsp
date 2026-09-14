@@ -7,6 +7,7 @@ from typing import Protocol
 from hmx_core.pysource import Constants, parse_source
 
 SELF_NAMES = frozenset({"self"})
+RECORDSET_NAMES = frozenset({"self", "record", "rec", "order", "request"})
 CHAINING_METHODS = frozenset({
     "filtered", "filtered_domain", "sorted", "browse", "exists", "search", "sudo",
     "with_context", "with_company", "with_user", "with_env", "create", "copy",
@@ -35,6 +36,24 @@ class ModelResolver(Protocol):
     def known(self, model: str) -> bool: ...
 
     def comodel(self, model: str, name: str) -> str | None: ...
+
+
+def is_env_receiver(node: ast.AST | None) -> bool:
+    return (isinstance(node, ast.Name) and node.id == "env") or (
+        isinstance(node, ast.Attribute) and node.attr == "env"
+        and isinstance(node.value, ast.Name) and node.value.id in RECORDSET_NAMES)
+
+
+def is_user_receiver(node: ast.AST | None) -> bool:
+    return (isinstance(node, ast.Name) and node.id == "user") or (
+        isinstance(node, ast.Attribute) and node.attr == "user"
+        and is_env_receiver(node.value))
+
+
+def is_model_data_receiver(node: ast.AST | None) -> bool:
+    return (isinstance(node, ast.Name) and node.id in ("model_data", "basemodeldata")) or (
+        isinstance(node, ast.Subscript) and is_env_receiver(node.value)
+        and isinstance(node.slice, ast.Constant) and node.slice.value == "basemodeldata")
 
 
 def _env_model(node: ast.AST) -> str | None:

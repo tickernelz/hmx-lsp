@@ -4,6 +4,7 @@ import os
 
 from lsprotocol import types
 
+from hmx_core.manifest import owner_of
 from hmx_ls.cursor.common import uri_to_path
 from hmx_ls.cursor.js_cursor import resolve_js_cursor
 from hmx_ls.cursor.py_cursor import resolve_py_cursor
@@ -118,6 +119,32 @@ def _widget_items(server) -> list[types.CompletionItem]:
     return items
 
 
+def _model_ref_items(server, context) -> list[types.CompletionItem]:
+    items: list[types.CompletionItem] = []
+    for model, entry in sorted(server.index.models.items()):
+        module = owner_of(entry.sites[0].path) if entry.sites else None
+        label = f"{module}.model_{model}" if module else f"model_{model}"
+        edit = None
+        if context.range:
+            edit = types.TextEdit(
+                new_text=label,
+                range=types.Range(
+                    start=types.Position(line=context.range[0][0] - 1,
+                                          character=context.range[0][1]),
+                    end=types.Position(line=context.range[1][0] - 1,
+                                        character=context.range[1][1]),
+                ),
+            )
+        items.append(types.CompletionItem(
+            label=label,
+            kind=types.CompletionItemKind.Reference,
+            detail=f"Python model {model}",
+            insert_text=label,
+            text_edit=edit,
+        ))
+    return items
+
+
 def _xmlid_items(server, only_groups: bool = False) -> list[types.CompletionItem]:
     records = server.index.records
     if only_groups:
@@ -204,6 +231,9 @@ def _from_xml(server, content: str, line: int, col: int) -> types.CompletionList
         return types.CompletionList(is_incomplete=False,
                                     items=_method_items(server, ctx.active_model))
     if ctx.kind == "model":
+        if ctx.reference:
+            items = _model_ref_items(server, ctx)
+            return types.CompletionList(is_incomplete=False, items=items)
         return types.CompletionList(is_incomplete=False, items=_model_items(server))
     if ctx.kind == "widget":
         return types.CompletionList(is_incomplete=False, items=_widget_items(server))
@@ -259,6 +289,10 @@ def _from_python(server, content: str, line: int, col: int, current: str) -> typ
                                     items=_field_items(server, model, detail))
     if ctx.kind == "xmlid":
         return types.CompletionList(is_incomplete=False, items=_xmlid_items(server))
+    if ctx.kind == "method" and ctx.active_model:
+        items = [item for item in _method_items(server, ctx.active_model)
+                 if item.label.startswith(ctx.value)]
+        return types.CompletionList(is_incomplete=False, items=items)
     return _empty()
 
 
