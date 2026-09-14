@@ -133,14 +133,15 @@ export async function downloadServer(
   const target = storedBinary(context);
   await fs.promises.mkdir(path.dirname(target), { recursive: true });
 
-  const tag = version && version !== "latest" ? version : "main";
+  const releasePath = version && version !== "latest"
+    ? "/releases/download/" + version
+    : "/releases/latest/download";
   const url =
     "https://github.com/" +
     RELEASE_OWNER +
     "/" +
     RELEASE_REPO +
-    "/releases/download/" +
-    tag +
+    releasePath +
     "/" +
     binaryName();
   log.appendLine("[hmx-ls] downloading " + url);
@@ -199,14 +200,14 @@ export async function resolveServer(
     candidates.push({ command: stored, args: ["serve"], origin: "downloaded release" });
   }
 
-  const onPath = searchPath("hmx-lsp") || searchPath("hmx-ls");
-  if (onPath) {
-    candidates.push({ command: onPath, args: ["serve"], origin: "PATH" });
-  }
-
   const dev = devCheckout();
   if (dev) {
     candidates.push(dev);
+  }
+
+  const onPath = searchPath("hmx-lsp") || searchPath("hmx-ls");
+  if (onPath) {
+    candidates.push({ command: onPath, args: ["serve"], origin: "PATH" });
   }
 
   for (const candidate of candidates) {
@@ -252,6 +253,8 @@ export function probe(command: ServerCommand, log: vscode.OutputChannel): boolea
       );
       return false;
     }
+    const version = (result.stdout || Buffer.from("")).toString().trim();
+    log.appendLine("[hmx-ls] accepted " + command.origin + ": " + version);
     return true;
   } catch (error) {
     log.appendLine("[hmx-ls] probe threw for " + command.origin + ": " + error);

@@ -39,8 +39,8 @@ the first hit:
 | 4 | Previously downloaded release | plugin-managed cache directory |
 | 5 | Project-local directory | `<project>/.hmx/`, `<project>/bin/`, `<project>/tools/` |
 | 6 | User directory | `~/.hmx-lsp/bin/`, `~/.local/bin/`, `~/.cache/hmx-lsp/bin/` |
-| 7 | `PATH` | `hmx-lsp`, or `hmx-ls` |
-| 8 | Source checkout | runs `bin/hmx-ls serve` when `hmx_ls/cli.py` is present; the wrapper sets `PYTHONPATH` so the working directory does not matter |
+| 7 | Source checkout | runs `bin/hmx-ls serve` when `hmx_ls/cli.py` is present; the wrapper sets `PYTHONPATH` so the working directory does not matter |
+| 8 | `PATH` | `hmx-lsp`, or `hmx-ls` |
 | 9 | GitHub release download | VS Code and Zed fetch the correct asset automatically |
 
 For a whole team the simplest setup is step 7: drop the binary on `PATH` once. For a repo-pinned

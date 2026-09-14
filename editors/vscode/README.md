@@ -75,8 +75,8 @@ In order, stopping at the first candidate that answers `--version` successfully:
 2. `HMX_LSP_PATH`
 3. a binary bundled with the extension
 4. a binary previously downloaded by the extension
-5. `hmx-lsp` or `hmx-ls` on `PATH`
-6. a source checkout at the workspace root or one level inside it
+5. a source checkout at the workspace root or one level inside it
+6. `hmx-lsp` or `hmx-ls` on `PATH`
 7. a fresh download, if `hmx.server.autoDownload` is on
 
 A candidate that exists but cannot run is skipped, and the reason is written to the output channel, so a broken entry no longer blocks the ones behind it.
