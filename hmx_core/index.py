@@ -65,6 +65,7 @@ class Index:
         return model in self.models
 
     def update_file(self, rel_path: str, content: bytes) -> set[str]:
+        rel_path = os.path.normpath(rel_path)
         affected: set[str] = set()
         if os.path.basename(rel_path) == "__hmx__.py":
             self.assets.update_file(rel_path, os.path.join(self.root, rel_path))
