@@ -47,7 +47,7 @@ cd hmx-lsp
 pip install -r requirements.txt
 ```
 
-The extension finds a checkout automatically when it sits at your workspace root, or one level inside it, and launches it through `bin/hmx-ls` so the interpreter does not need the package installed.
+The extension finds a checkout automatically when it sits at your workspace root, or one level inside it. It launches the selected interpreter with the checkout as `cwd` and `PYTHONPATH`, so the package does not need to be installed.
 
 To be explicit instead, point the setting at the wrapper:
 

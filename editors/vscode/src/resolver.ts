@@ -10,6 +10,7 @@ export interface ServerCommand {
   origin: string;
   cwd?: string;
   env?: Record<string, string>;
+  probeArgs?: string[];
 }
 
 const RELEASE_OWNER = "tickernelz";
@@ -110,6 +111,7 @@ function devCheckout(): ServerCommand | undefined {
           origin: "dev checkout at " + candidate,
           cwd: candidate,
           env: { PYTHONPATH: candidate },
+          probeArgs: ["-c", "import lsprotocol, hmx_ls.server"],
         };
       }
     }
@@ -235,7 +237,7 @@ export async function resolveServer(
 }
 
 export function probe(command: ServerCommand, log: vscode.OutputChannel): boolean {
-  const args = command.args.slice(0, -1).concat("--version");
+  const args = command.probeArgs ?? command.args.slice(0, -1).concat("--version");
   try {
     const result = cp.spawnSync(command.command, args, {
       timeout: 10000,
