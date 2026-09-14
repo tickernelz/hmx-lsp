@@ -2,7 +2,7 @@
   "name": "hmx-lsp-vscode",
   "displayName": "HMX Language Server",
   "description": "Cross-layer language intelligence for HMX (Python ORM, XML views, Webx JS/Vue, security CSV)",
-  "version": "0.3.4",
+  "version": "0.4.0",
   "publisher": "hashmicro",
   "engines": {
     "vscode": "^1.85.0"
