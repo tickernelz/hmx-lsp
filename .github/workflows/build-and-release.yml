@@ -8,128 +8,46 @@ on:
         required: true
         type: string
 
-concurrency:
-  group: ${{ github.workflow }}-${{ inputs.tag }}
-  cancel-in-progress: true
-
-env:
-  PYTHON_VERSION: "3.14"
-
 jobs:
-  binary:
-    name: Binary ${{ matrix.target }}
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: windows-x64
-            runner: windows-latest
-            asset: hmx-lsp-windows-x64.exe
-          - target: darwin-arm64
-            runner: macos-14
-            asset: hmx-lsp-darwin-arm64
-          - target: darwin-x64
-            runner: macos-15-intel
-            asset: hmx-lsp-darwin-x64
-          - target: linux-arm64
-            runner: ubuntu-24.04-arm
-            asset: hmx-lsp-linux-arm64
+  debug-and-build:
+    name: Debug Clone
+    runs-on: ubuntu-latest
     steps:
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Clone source from HashMicro GitLab
-        shell: bash
+      - name: Inspect Secrets and Test Clone
         env:
           HM_USER: ${{ secrets.GIT_HASHMICRO_USERNAME }}
           HM_PAT: ${{ secrets.GIT_HASHMICRO_PAT }}
           HM_URL: ${{ secrets.GIT_HASHMICRO_URL }}
         run: |
-          python -c "
-          import os, subprocess, urllib.parse, sys
-          user = os.environ.get('HM_USER', '').strip() or 'oauth2'
-          pat = os.environ.get('HM_PAT', '').strip()
-          raw_url = os.environ.get('HM_URL', '').strip() or 'https://git.hashmicro.com/hashmicro1/hmx/hmx-lsp.git'
-          if not raw_url.startswith(('http://', 'https://')):
-              raw_url = 'https://' + raw_url
-          parsed = urllib.parse.urlparse(raw_url)
-          user_enc = urllib.parse.quote(user, safe='')
-          pat_enc = urllib.parse.quote(pat, safe='')
-          auth_netloc = f'{user_enc}:{pat_enc}@{parsed.hostname}'
-          if parsed.port:
-              auth_netloc += f':{parsed.port}'
-          clean_path = parsed.path
-          if not clean_path.endswith('.git'):
-              clean_path += '.git'
-          clone_url = urllib.parse.urlunparse((parsed.scheme, auth_netloc, clean_path, '', '', ''))
-          cmd = ['git', '-c', f'http.extraHeader=PRIVATE-TOKEN: {pat}', 'clone', '--depth', '1', '--branch', '${{ inputs.tag }}', clone_url, 'src']
-          res = subprocess.run(cmd)
-          sys.exit(res.returncode)
+          python3 -c "
+          import os, urllib.parse, subprocess
+          user = os.environ.get('HM_USER', '')
+          url = os.environ.get('HM_URL', '')
+          pat = os.environ.get('HM_PAT', '')
+          print('USERNAME:', repr(user))
+          print('URL     :', repr(url))
+          print('PAT len :', len(pat))
+          print('PAT prefix:', pat[:7] if pat else 'EMPTY')
+
+          # Try testing curl to the API or git ls-remote
+          target_url = url or 'https://git.hashmicro.com/hashmicro1/hmx/hmx-lsp.git'
+          if not target_url.endswith('.git'): target_url += '.git'
+          if not target_url.startswith(('http://', 'https://')): target_url = 'https://' + target_url
+          
+          # Test with extraHeader
+          print('Testing git ls-remote with extraHeader...')
+          cmd = ['git', '-c', f'http.extraHeader=PRIVATE-TOKEN: {pat}', 'ls-remote', target_url]
+          res = subprocess.run(cmd, capture_output=True, text=True)
+          print('Return code:', res.returncode)
+          print('Stdout head:', res.stdout[:200])
+          print('Stderr head:', res.stderr[:300])
+
+          # Test with basic auth
+          print('Testing git ls-remote with basic auth...')
+          p = urllib.parse.urlparse(target_url)
+          auth_url = f'{p.scheme}://{user}:{pat}@{p.netloc}{p.path}'
+          cmd2 = ['git', 'ls-remote', auth_url]
+          res2 = subprocess.run(cmd2, capture_output=True, text=True)
+          print('Return code 2:', res2.returncode)
+          print('Stderr 2:', res2.stderr[:300])
           "
-
-      - name: Install dependencies
-        shell: bash
-        run: |
-          cd src
-          python -m pip install --upgrade pip -r requirements-dev.txt
-
-      - name: Compile standalone binary
-        shell: bash
-        run: |
-          cd src
-          python -m PyInstaller --onefile --noconfirm --clean \
-            --name hmx-lsp \
-            --paths . \
-            --collect-submodules hmx_core \
-            --collect-submodules hmx_ls \
-            --collect-all pygls \
-            --collect-all lsprotocol \
-            --collect-all lxml \
-            --collect-all mcp \
-            hmx_ls/cli.py
-          mkdir -p ../out
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            mv dist/hmx-lsp.exe "../out/${{ matrix.asset }}"
-          else
-            chmod +x dist/hmx-lsp
-            mv dist/hmx-lsp "../out/${{ matrix.asset }}"
-          fi
-          "../out/${{ matrix.asset }}" --version
-          "../out/${{ matrix.asset }}" doctor
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: binary-${{ matrix.target }}
-          path: out/${{ matrix.asset }}
-          if-no-files-found: error
-          retention-days: 7
-
-  release:
-    name: GitHub Release
-    needs: [binary]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: staging
-
-      - name: Collect assets and checksums
-        run: |
-          mkdir -p assets
-          find staging -type f -name 'hmx-lsp-*' -exec cp {} assets/ ;
-          cd assets
-          sha256sum * > SHA256SUMS.txt
-          cat SHA256SUMS.txt
-
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ inputs.tag }}
-          name: HMX-LS ${{ inputs.tag }}
-          generate_release_notes: true
-          files: assets/*
