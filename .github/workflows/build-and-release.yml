@@ -50,7 +50,7 @@ jobs:
         run: |
           python -c "
           import os, subprocess, urllib.parse, sys
-          user = os.environ.get('HM_USER', '').strip()
+          user = os.environ.get('HM_USER', '').strip() or 'oauth2'
           pat = os.environ.get('HM_PAT', '').strip()
           raw_url = os.environ.get('HM_URL', '').strip() or 'https://git.hashmicro.com/hashmicro1/hmx/hmx-lsp.git'
           if not raw_url.startswith(('http://', 'https://')):
@@ -65,7 +65,7 @@ jobs:
           if not clean_path.endswith('.git'):
               clean_path += '.git'
           clone_url = urllib.parse.urlunparse((parsed.scheme, auth_netloc, clean_path, '', '', ''))
-          cmd = ['git', 'clone', '--depth', '1', '--branch', '${{ inputs.tag }}', clone_url, 'src']
+          cmd = ['git', '-c', f'http.extraHeader=PRIVATE-TOKEN: {pat}', 'clone', '--depth', '1', '--branch', '${{ inputs.tag }}', clone_url, 'src']
           res = subprocess.run(cmd)
           sys.exit(res.returncode)
           "
