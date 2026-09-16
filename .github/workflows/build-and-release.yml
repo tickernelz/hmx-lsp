@@ -122,7 +122,7 @@ jobs:
       - name: Collect assets and checksums
         run: |
           mkdir -p assets
-          find staging -type f -name 'hmx-lsp-*' -exec cp {} assets/ ;
+          find staging -type f -name 'hmx-lsp-*' -exec cp {} assets/ ';'
           cd assets
           sha256sum * > SHA256SUMS.txt
           cat SHA256SUMS.txt
