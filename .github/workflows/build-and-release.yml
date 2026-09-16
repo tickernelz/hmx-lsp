@@ -43,13 +43,32 @@ jobs:
 
       - name: Clone source from HashMicro GitLab
         shell: bash
+        env:
+          HM_USER: ${{ secrets.GIT_HASHMICRO_USERNAME }}
+          HM_PAT: ${{ secrets.GIT_HASHMICRO_PAT }}
+          HM_URL: ${{ secrets.GIT_HASHMICRO_URL }}
         run: |
-          URL="${{ secrets.GIT_HASHMICRO_URL }}"
-          if [ -z "$URL" ]; then
-            URL="https://git.hashmicro.com/hashmicro1/hmx/hmx-lsp.git"
-          fi
-          AUTH_URL=$(echo "$URL" | sed -E "s#https://#https://${{ secrets.GIT_HASHMICRO_USERNAME }}:${{ secrets.GIT_HASHMICRO_PAT }}@#")
-          git clone --depth 1 --branch "${{ inputs.tag }}" "$AUTH_URL" src
+          python -c "
+          import os, subprocess, urllib.parse, sys
+          user = os.environ.get('HM_USER', '').strip()
+          pat = os.environ.get('HM_PAT', '').strip()
+          raw_url = os.environ.get('HM_URL', '').strip() or 'https://git.hashmicro.com/hashmicro1/hmx/hmx-lsp.git'
+          if not raw_url.startswith(('http://', 'https://')):
+              raw_url = 'https://' + raw_url
+          parsed = urllib.parse.urlparse(raw_url)
+          user_enc = urllib.parse.quote(user, safe='')
+          pat_enc = urllib.parse.quote(pat, safe='')
+          auth_netloc = f'{user_enc}:{pat_enc}@{parsed.hostname}'
+          if parsed.port:
+              auth_netloc += f':{parsed.port}'
+          clean_path = parsed.path
+          if not clean_path.endswith('.git'):
+              clean_path += '.git'
+          clone_url = urllib.parse.urlunparse((parsed.scheme, auth_netloc, clean_path, '', '', ''))
+          cmd = ['git', 'clone', '--depth', '1', '--branch', '${{ inputs.tag }}', clone_url, 'src']
+          res = subprocess.run(cmd)
+          sys.exit(res.returncode)
+          "
 
       - name: Install dependencies
         shell: bash
@@ -71,19 +90,15 @@ jobs:
             --collect-all lxml \
             --collect-all mcp \
             hmx_ls/cli.py
-
-      - name: Stage and smoke test
-        shell: bash
-        run: |
-          mkdir -p out
+          mkdir -p ../out
           if [ "${{ runner.os }}" = "Windows" ]; then
-            mv src/dist/hmx-lsp.exe "out/${{ matrix.asset }}"
+            mv dist/hmx-lsp.exe "../out/${{ matrix.asset }}"
           else
-            chmod +x src/dist/hmx-lsp
-            mv src/dist/hmx-lsp "out/${{ matrix.asset }}"
+            chmod +x dist/hmx-lsp
+            mv dist/hmx-lsp "../out/${{ matrix.asset }}"
           fi
-          "./out/${{ matrix.asset }}" --version
-          "./out/${{ matrix.asset }}" doctor
+          "../out/${{ matrix.asset }}" --version
+          "../out/${{ matrix.asset }}" doctor
 
       - uses: actions/upload-artifact@v4
         with:
